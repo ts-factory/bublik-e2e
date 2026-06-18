@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from core.common import CliError, read_json, write_json
-from core.constants import NOK_BORDERS, RESULT_TYPES, RUN_STATUS_BY_CONCLUSION
+from core.constants import (
+    NOK_BORDERS,
+    RESULT_TYPES,
+    RUN_COMPLETE_FILE,
+    RUN_STATUS_BY_CONCLUSION,
+    UNFINISHED_CONCLUSIONS,
+)
 from core.fixture_api import FixtureProvider
 from core.planning import MixValue, PlannedRun, parse_date, parse_mix_key
 from core.settings import DEFAULT_TIMEZONE
@@ -151,7 +157,11 @@ def patch_bundle(
     upsert_meta(meta_items, "E2E_RUN_ID", spec.fixture_id, "label")
     upsert_meta(meta_items, "CFG", spec.id)
     upsert_meta(meta_items, "START_TIMESTAMP", start_timestamp, "timestamp")
-    upsert_meta(meta_items, "FINISH_TIMESTAMP", finish_timestamp, "timestamp")
+    if spec.conclusion not in UNFINISHED_CONCLUSIONS:
+        upsert_meta(meta_items, "FINISH_TIMESTAMP", finish_timestamp, "timestamp")
+    else:
+        # Still-running runs have no finish; drop any inherited timestamp.
+        meta_items[:] = [m for m in meta_items if m.get("name") != "FINISH_TIMESTAMP"]
     upsert_meta(meta_items, "CAMPAIGN_DATE", spec.run_date)
     for key, value in spec.metas.items():
         if key not in {"RUN_STATUS"}:
@@ -193,6 +203,10 @@ def generate_bundle(
         if not (output_dir / required).is_file():
             raise CliError(f"fixture {fixture.name!r} did not create {required}")
     patch_bundle(output_dir, fixture=fixture, spec=spec, pretty=pretty)
+    # Bublik only stores a run's finish (Start/Finish/Duration in the UI) when it can
+    # fetch this marker at the run URL; write it for finished runs only.
+    if spec.conclusion not in UNFINISHED_CONCLUSIONS:
+        (output_dir / RUN_COMPLETE_FILE).write_text("")
     return output_dir
 
 

@@ -56,3 +56,12 @@ EXPECTED_CONCLUSION = {
     "compromised": "run-compromised",
 }
 NOK_BORDERS = (20, 80)
+
+# File Bublik fetches at the run URL to decide a run is complete (RUN_COMPLETE_FILE,
+# schema default in bublik per_conf.json). Its presence makes the importer store
+# run.finish; its absence leaves Finish/Duration empty.
+RUN_COMPLETE_FILE = ".done"
+
+# Conclusions whose run is still in progress, so they get neither a finish timestamp
+# nor the complete-marker. Every other conclusion is treated as finished.
+UNFINISHED_CONCLUSIONS = {"running", "busy"}
