@@ -33,6 +33,14 @@ class Package:
     tests: tuple[TestFamily, ...] = field(default_factory=tuple)
 
 
+@dataclass(frozen=True)
+class RunProfile:
+    name: str
+    kind: str
+    metas: dict[str, str]
+    tags: dict[str, str | None]
+
+
 class SyntheticFixture(BaseFixture):
     def __init__(
         self,
@@ -43,6 +51,7 @@ class SyntheticFixture(BaseFixture):
         revision_url: str,
         packages: tuple[Package, ...],
         tags: dict[str, str | None],
+        profiles: tuple[RunProfile, ...] = (),
     ) -> None:
         self.name = name
         self.project = project
@@ -50,6 +59,31 @@ class SyntheticFixture(BaseFixture):
         self.revision_url = revision_url
         self.packages = packages
         self.tags = tags
+        self.profiles = profiles
+
+    def profile_for(self, conclusion: str, ordinal: int) -> RunProfile | None:
+        if not self.profiles:
+            return None
+        preferences = {
+            "ok": ("ok", "warning"),
+            "nok-warning": ("result-error", "warning", "ok"),
+            "nok-error": ("result-error", "status-error", "ok"),
+            "error": ("status-error", "result-error", "ok"),
+            "warning": ("warning", "ok"),
+        }.get(conclusion, ("ok", "result-error", "status-error", "warning"))
+
+        for kind in preferences:
+            candidates = [profile for profile in self.profiles if profile.kind == kind]
+            if candidates:
+                return candidates[(ordinal - 1) % len(candidates)]
+        return self.profiles[(ordinal - 1) % len(self.profiles)]
+
+    def build_plan(self, node: dict[str, Any]) -> dict[str, Any]:
+        plan: dict[str, Any] = {"name": node["name"], "type": node["type"]}
+        children = node.get("iters") or []
+        if children:
+            plan["children"] = [self.build_plan(child) for child in children]
+        return plan
 
     def generate(self, output_dir: Path, pretty: bool) -> None:
         if output_dir.exists():
@@ -204,7 +238,13 @@ class SyntheticFixture(BaseFixture):
         )
         (output_dir / "bublik.json").write_text(
             json.dumps(
-                {"iters": [root], "tags": self.tags},
+                {
+                    "start_ts": root["start_ts"],
+                    "end_ts": root["end_ts"],
+                    "plan": self.build_plan(root),
+                    "iters": [root],
+                    "tags": self.tags,
+                },
                 indent=indent,
                 separators=separators,
             )

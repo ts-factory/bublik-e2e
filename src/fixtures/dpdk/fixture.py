@@ -1,6 +1,6 @@
 """Synthetic dpdk-ethdev-ts fixture provider."""
 
-from core.synthetic_fixture import Package, SyntheticFixture, TestFamily
+from core.synthetic_fixture import Package, RunProfile, SyntheticFixture, TestFamily
 
 
 def families(names: str, objective: str) -> tuple[TestFamily, ...]:
@@ -78,6 +78,81 @@ testpmd_txonly_tso testpmd_txonly_tso_multiseg testpmd_rxonly
 testpmd_dual_port_rxonly testpmd_dual_port_fwd
 """
 
+profiles = (
+    RunProfile(
+        name="virtio_virtio-dain-linux-mm-612",
+        kind="ok",
+        metas={
+            "CFG": "virtio_virtio:dain",
+            "TS_NAME": "dpdk-ethdev-ts",
+        },
+        tags={
+            "net_virtio": None,
+            "pci-1af4-1000": None,
+            "peer-qemu-virtio-net": None,
+            "qemu-virtio-net": None,
+            "linux-mm": "612",
+            "uio_pci_generic": None,
+            "kernel-linux": None,
+            "max_rx_queues": "1",
+            "max_tx_queues": "1",
+            "pci-1af4": None,
+            "dpdk": "26070001",
+            "dpdk-26.07.0-rc1": None,
+        },
+    ),
+    RunProfile(
+        name="balin-x710-p0-linux-mm-515",
+        kind="ok",
+        metas={
+            "CFG": "balin-x710-p0",
+            "TS_NAME": "dpdk-ethdev-ts",
+        },
+        tags={
+            "net_i40e": None,
+            "pci-8086-1572": None,
+            "linux-mm": "515",
+            "vfio-pci": None,
+            "kernel-linux": None,
+            "num_vfs": "64",
+            "pci-8086": None,
+            "pci-sub-8086": None,
+            "pci-sub-8086-0008": None,
+            "dpdk": "25030001",
+            "dpdk-25.03.0-rc1": None,
+        },
+    ),
+    RunProfile(
+        name="galdor-x710-linux-mm-608-unexpected",
+        kind="result-error",
+        metas={
+            "CFG": "galdor-x710",
+            "TS_NAME": "dpdk-ethdev-ts",
+        },
+        tags={
+            "pci-8086-1572": None,
+            "linux-mm": "608",
+            "vfio-pci": None,
+            "kernel-linux": None,
+            "num_vfs": "64",
+            "pci-8086": None,
+            "pci-sub-8086": None,
+            "pci-sub-8086-0008": None,
+            "dpdk": "26070001",
+            "dpdk-26.07.0-rc1": None,
+        },
+    ),
+    RunProfile(
+        name="virtio_virtio-dain-import-error",
+        kind="status-error",
+        metas={
+            "CFG": "virtio_virtio:dain",
+            "TS_NAME": "dpdk-ethdev-ts",
+        },
+        tags={},
+    ),
+)
+
 fixture = SyntheticFixture(
     name="dpdk-ethdev-ts",
     project="tsf/dpdk-ethdev",
@@ -90,6 +165,7 @@ fixture = SyntheticFixture(
         "max_rx_queues": "2",
         "max_tx_queues": "2",
     },
+    profiles=profiles,
     packages=(
         Package(
             name="prologue",

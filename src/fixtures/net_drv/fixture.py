@@ -1,6 +1,6 @@
 """Synthetic net-drv-ts fixture provider."""
 
-from core.synthetic_fixture import Package, SyntheticFixture, TestFamily
+from core.synthetic_fixture import Package, RunProfile, SyntheticFixture, TestFamily
 
 
 def families(names: str, objective: str) -> tuple[TestFamily, ...]:
@@ -16,6 +16,80 @@ packet_variants = tuple(
     for payload in ("64", "512", "1500")
 )
 
+profiles = (
+    RunProfile(
+        name="virtio_virtio-dain-linux-mm-601",
+        kind="ok",
+        metas={
+            "CFG": "virtio_virtio:dain",
+            "TS_NAME": "net-drv-ts",
+        },
+        tags={
+            "pci-1af4-1000": None,
+            "peer-qemu-virtio-net": None,
+            "qemu-virtio-net": None,
+            "linux-mm": "601",
+            "virtio-pci": None,
+            "pci-1af4": None,
+            "pci-sub-1af4": None,
+            "pci-sub-1af4-0001": None,
+            "port-Other": None,
+            "sp-unknown": None,
+            "active-port-count": "1",
+            "iut-cpus": "2",
+            "iut-no-ptp": None,
+            "max-combined-channels": "1",
+            "rx-queues": "1",
+            "tst-cpus": "2",
+            "tst-no-ptp": None,
+        },
+    ),
+    RunProfile(
+        name="beechbone-e810-linux-mm-608",
+        kind="ok",
+        metas={
+            "CFG": "beechbone-e810",
+            "TS_NAME": "net-drv-ts",
+        },
+        tags={
+            "ice": None,
+            "linux-mm": "608",
+            "pci-8086-159b": None,
+            "peer-ice": None,
+            "pci-8086": None,
+            "pci-sub-8086": None,
+            "pci-sub-8086-0003": None,
+        },
+    ),
+    RunProfile(
+        name="dain-sfc-linux-mm-519-warning",
+        kind="warning",
+        metas={
+            "CFG": "dain-sfc",
+            "TS_NAME": "net-drv-ts",
+        },
+        tags={
+            "linux-mm": "519",
+            "pci-1924-0a03": None,
+            "peer-sfc": None,
+            "sfc": None,
+            "kernel-linux": None,
+            "pci-1924": None,
+            "pci-sub-1924": None,
+            "pci-sub-1924-8017": None,
+        },
+    ),
+    RunProfile(
+        name="virtio_virtio-dain-import-error",
+        kind="status-error",
+        metas={
+            "CFG": "virtio_virtio:dain",
+            "TS_NAME": "net-drv-ts",
+        },
+        tags={},
+    ),
+)
+
 fixture = SyntheticFixture(
     name="net-drv-ts",
     project="tsf/net-drv",
@@ -28,6 +102,7 @@ fixture = SyntheticFixture(
         "max_rx_queues": "2",
         "max_tx_queues": "2",
     },
+    profiles=profiles,
     packages=(
         Package(
             name="prologue",

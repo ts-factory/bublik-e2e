@@ -53,6 +53,14 @@ def iso_for_day(run_date: str, ordinal: int) -> str:
     return ts.isoformat(timespec="milliseconds")
 
 
+def parse_bublik_timestamp(value: str) -> datetime:
+    return datetime.strptime(value, "%Y.%m.%d %H:%M:%S.%f")
+
+
+def format_bublik_timestamp(value: datetime) -> str:
+    return value.strftime("%Y.%m.%d %H:%M:%S.%f")[:-3]
+
+
 def add_utc_timestamps(node: dict[str, Any], offset: timedelta) -> None:
     for key in ("start_ts", "end_ts"):
         value = node.get(key)
@@ -65,9 +73,48 @@ def add_utc_timestamps(node: dict[str, Any], offset: timedelta) -> None:
         add_utc_timestamps(child, offset)
 
 
+def rebase_timestamps(
+    node: dict[str, Any],
+    *,
+    original_root_start: datetime,
+    new_root_start: datetime,
+    tz_offset: timedelta,
+) -> None:
+    for key in ("start_ts", "end_ts"):
+        value = node.get(key)
+        if not value:
+            continue
+        rebased = new_root_start + (parse_bublik_timestamp(value) - original_root_start)
+        node[key] = format_bublik_timestamp(rebased)
+        node[f"{key}_utc"] = rebased.replace(tzinfo=timezone(tz_offset)).timestamp()
+
+    for child in node.get("iters") or []:
+        rebase_timestamps(
+            child,
+            original_root_start=original_root_start,
+            new_root_start=new_root_start,
+            tz_offset=tz_offset,
+        )
+
+
+def apply_run_profile(
+    meta_items: list[dict[str, Any]],
+    bublik_tags: dict[str, Any],
+    profile: Any | None,
+) -> None:
+    if profile is None:
+        return
+    for name, value in getattr(profile, "metas", {}).items():
+        upsert_meta(meta_items, name, value)
+    bublik_tags.clear()
+    bublik_tags.update(getattr(profile, "tags", {}))
+    bublik_tags["source_profile"] = getattr(profile, "name", "real-world")
+
+
 def patch_bundle(
     output_dir: Path,
     *,
+    fixture: FixtureProvider,
     spec: FixtureSpec,
     pretty: bool,
 ) -> None:
@@ -78,10 +125,27 @@ def patch_bundle(
 
     meta_items = meta_data.setdefault("metas", [])
     start_timestamp = iso_for_day(spec.run_date, int(spec.tags.get("ordinal", "0")))
-    start_offset = datetime.fromisoformat(start_timestamp).utcoffset() or timedelta()
-    finish_timestamp = (
-        datetime.fromisoformat(start_timestamp) + timedelta(seconds=42)
-    ).isoformat(timespec="milliseconds")
+    start_datetime = datetime.fromisoformat(start_timestamp)
+    start_offset = start_datetime.utcoffset() or timedelta()
+    roots = bublik_data.get("iters") or []
+    if roots:
+        root = roots[0]
+        original_root_start = parse_bublik_timestamp(root["start_ts"])
+        new_root_start = start_datetime.replace(tzinfo=None)
+        rebase_timestamps(
+            root,
+            original_root_start=original_root_start,
+            new_root_start=new_root_start,
+            tz_offset=start_offset,
+        )
+        bublik_data["start_ts"] = root.get("start_ts")
+        bublik_data["end_ts"] = root.get("end_ts")
+        finish_timestamp = (
+            datetime.fromtimestamp(root["end_ts_utc"], tz=timezone(start_offset))
+            .isoformat(timespec="milliseconds")
+        )
+    else:
+        finish_timestamp = start_timestamp
     upsert_meta(meta_items, "PROJECT", spec.project)
     upsert_meta(meta_items, "RUN_STATUS", spec.metas.get("RUN_STATUS", "DONE"))
     upsert_meta(meta_items, "E2E_RUN_ID", spec.fixture_id, "label")
@@ -94,6 +158,11 @@ def patch_bundle(
             upsert_meta(meta_items, key, value)
 
     bublik_tags = bublik_data.setdefault("tags", {})
+    profile = None
+    profile_for = getattr(fixture, "profile_for", None)
+    if callable(profile_for):
+        profile = profile_for(spec.conclusion, int(spec.tags.get("ordinal", "1")))
+    apply_run_profile(meta_items, bublik_tags, profile)
     bublik_tags.update(
         {
             "fixture_id": spec.fixture_id,
@@ -123,7 +192,7 @@ def generate_bundle(
     for required in ("meta_data.json", "bublik.json"):
         if not (output_dir / required).is_file():
             raise CliError(f"fixture {fixture.name!r} did not create {required}")
-    patch_bundle(output_dir, spec=spec, pretty=pretty)
+    patch_bundle(output_dir, fixture=fixture, spec=spec, pretty=pretty)
     return output_dir
 
 
