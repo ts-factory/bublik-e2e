@@ -26,6 +26,7 @@ from rich.table import Table
 from core.common import CliError, console, normalize_url, read_json, write_json
 from core.manifest import generate_manifest
 from core.settings import Settings, resolve_manifest
+from core.summary import render_run_summary
 
 # Manifest keys whose values embed the instance base URL (used when retargeting
 # an import at a different host than the manifest was generated against).
@@ -322,6 +323,8 @@ def import_via_api(
     if old_base and old_base != base_url:
         retarget_manifest_urls(manifest, old_base, base_url)
 
+    render_run_summary(manifest, console, title="Importing runs")
+
     cookie_dir = Path(tempfile.mkdtemp(prefix="bublik-e2e-api-"))
     cookie_jar = cookie_dir / "cookies.txt"
     try:
@@ -357,5 +360,7 @@ def import_manifest(args: argparse.Namespace) -> None:
 
 
 def generate_and_import(args: argparse.Namespace) -> None:
-    generate_manifest(args)
+    # The summary is rendered once, just before import (in import_via_api), so the
+    # generate step suppresses its own copy to avoid showing the same table twice.
+    generate_manifest(args, show_summary=False)
     import_manifest(args)

@@ -16,7 +16,7 @@ from core.bundle import (
     leaf_tests,
     spec_from_plan,
 )
-from core.common import CliError, read_json, write_json
+from core.common import CliError, console, read_json, write_json
 from core.constants import (
     ABNORMAL_STATUSES,
     EXPECTED_CONCLUSION,
@@ -27,6 +27,7 @@ from core.constants import (
 from core.discovery import selected_fixtures
 from core.planning import build_mixes, build_plan
 from core.settings import Settings, resolve_manifest
+from core.summary import render_run_summary
 
 REVISION_SUFFIXES = {"_GIT_URL": "url", "_BRANCH": "branch", "_REV": "rev"}
 
@@ -236,7 +237,7 @@ def unique_sorted(values: Any) -> list[str]:
     return sorted(collected)
 
 
-def generate_manifest(args: argparse.Namespace) -> None:
+def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) -> None:
     settings = Settings.from_args(args)
     publish_dir = settings.publish_dir
     if publish_dir is None:
@@ -358,4 +359,6 @@ def generate_manifest(args: argparse.Namespace) -> None:
         "bundles": bundles,
     }
     write_json(manifest_path, manifest, args.pretty)
+    if show_summary:
+        render_run_summary(manifest, console, title="Generated runs")
     print(str(manifest_path))
