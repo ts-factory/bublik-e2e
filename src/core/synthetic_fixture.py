@@ -52,6 +52,8 @@ class SyntheticFixture(BaseFixture):
         packages: tuple[Package, ...],
         tags: dict[str, str | None],
         profiles: tuple[RunProfile, ...] = (),
+        root_objective: str | None = None,
+        report_configs: tuple[dict[str, Any], ...] = (),
     ) -> None:
         self.name = name
         self.project = project
@@ -60,6 +62,8 @@ class SyntheticFixture(BaseFixture):
         self.packages = packages
         self.tags = tags
         self.profiles = profiles
+        self.root_objective = root_objective
+        self.report_configs = report_configs
 
     def profile_for(self, conclusion: str, ordinal: int) -> RunProfile | None:
         if not self.profiles:
@@ -193,7 +197,8 @@ class SyntheticFixture(BaseFixture):
             "plan_id": 0,
             "tin": -1,
             "reqs": [],
-            "objective": f"Synthetic {self.name} qualification run.",
+            "objective": self.root_objective
+            or f"Synthetic {self.name} qualification run.",
             "params": {},
             "path": [self.name],
             "path_str": self.name,

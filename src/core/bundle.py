@@ -284,7 +284,7 @@ def apply_mix(
     for leaf in leaves:
         set_leaf_result(leaf, "PASSED", False)
 
-    index = 0
+    assignments: list[tuple[str, bool]] = []
     for item in mix:
         prop, type_name = parse_mix_key(item.key)
         count = (
@@ -298,11 +298,19 @@ def apply_mix(
         unexpected = prop == "unexpected"
         if prop == "notRun":
             status = "INCOMPLETE" if type_name == "incomplete" else status
-        for _ in range(count):
-            if index >= total:
-                raise CliError(f"mix uses more results than fixture has: {bundle_dir}")
-            set_leaf_result(leaves[index], status, unexpected)
-            index += 1
+        assignments.extend([(status, unexpected)] * count)
+
+    if len(assignments) > total:
+        raise CliError(f"mix uses more results than fixture has: {bundle_dir}")
+
+    # Scatter the assignments across the whole leaf list using a coprime
+    # golden-ratio stride so every package gets a representative share, instead
+    # of clustering all non-passing results in the first few packages.
+    stride = max(1, int(total * 0.6180339887))
+    while total > 1 and math.gcd(stride, total) != 1:
+        stride += 1
+    for offset, (status, unexpected) in enumerate(assignments):
+        set_leaf_result(leaves[(offset * stride) % total], status, unexpected)
 
     for root in bublik.get("iters", []):
         recompute_package_statuses(root)

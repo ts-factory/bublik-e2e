@@ -28,6 +28,7 @@ class BaseFixture:
     project: str = "bublik-e2e"
     fixture_id_prefix: str = "e2e"
     default_mix: str = "fixture-default"
+    report_configs: tuple = ()
 
     def generate(self, output_dir: Path, pretty: bool) -> None:
         raise NotImplementedError

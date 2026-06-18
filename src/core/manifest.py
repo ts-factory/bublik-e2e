@@ -327,6 +327,24 @@ def generate_manifest(args: argparse.Namespace) -> None:
             }
         )
 
+    seen_configs: set[tuple[str, str]] = set()
+    configs: list[dict[str, Any]] = []
+    for fixture in fixtures.values():
+        for report_config in getattr(fixture, "report_configs", ()):
+            key = (fixture.project, report_config["name"])
+            if key in seen_configs:
+                continue
+            seen_configs.add(key)
+            configs.append(
+                {
+                    "project": fixture.project,
+                    "type": "report",
+                    "name": report_config["name"],
+                    "description": report_config.get("description", ""),
+                    "content": report_config["content"],
+                }
+            )
+
     manifest = {
         "version": 1,
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -336,6 +354,7 @@ def generate_manifest(args: argparse.Namespace) -> None:
         "historyUrl": settings.history_url,
         "importUrl": f"{logs_base}/{urllib.parse.quote(seg)}/",
         "emptyDates": sorted(set(empty_dates)),
+        "configs": configs,
         "bundles": bundles,
     }
     write_json(manifest_path, manifest, args.pretty)

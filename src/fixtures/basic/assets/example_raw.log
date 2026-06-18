@@ -72,6 +72,10 @@
 2026-04-21 12:00:00,102:[INFO    ][fio         ]  fio job rw-128k started
 2026-04-21 12:00:05,000:[INFO    ][fio         ]  Jobs: 1 (f=1): [m(1)][50.0%][r=612MiB/s,w=404MiB/s][r=4892,w=3236 IOPS][eta 00m:05s]
 2026-04-21 12:00:09,900:[INFO    ][fio         ]  Jobs: 1 (f=1): [m(1)][99.0%][r=621MiB/s,w=410MiB/s][r=4968,w=3280 IOPS][eta 00m:00s]
+2026-04-21 12:00:09,950:[INFO    ][runner      ]  MI: GRAPH_START tool=fio title="Sampled rw-128k bandwidth" name=bandwidth-over-time x_type=sample x_name="Sample" x_units=index x_values=1,2,3
+2026-04-21 12:00:09,951:[INFO    ][runner      ]  MI: GRAPH_SERIES type=bandwidth name=read description="Read bandwidth" units=MiB/s values=612.0,621.0,620.5
+2026-04-21 12:00:09,952:[INFO    ][runner      ]  MI: GRAPH_SERIES type=bandwidth name=write description="Write bandwidth" units=MiB/s values=404.0,410.0,410.2
+2026-04-21 12:00:09,953:[INFO    ][runner      ]  MI: GRAPH_END
 2026-04-21 12:00:10,100:[INFO    ][runner      ]  MI: MEASUREMENT name=read_bw_mib_s value=620.5 units=MiB/s tool=fio stage=throughput side=read
 2026-04-21 12:00:10,101:[INFO    ][runner      ]  MI: MEASUREMENT name=write_bw_mib_s value=410.2 units=MiB/s tool=fio stage=throughput side=write
 2026-04-21 12:00:10,102:[INFO    ][runner      ]  MI: ARTIFACT name=write_io value="158GiB (170GB)"
@@ -135,6 +139,9 @@
 2026-04-21 12:00:41,002:[INFO    ][runner      ]  MI: STEP text="Wait for device enumeration"
 2026-04-21 12:00:41,003:[INFO    ][nvmecli     ]  nvme list shows /dev/nvme0n1
 2026-04-21 12:00:41,003:[INFO    ][dmesg       ]  nvme nvme0: 8/0/0 default/read/poll queues
+2026-04-21 12:00:41,003:[INFO    ][runner      ]  MI: GRAPH_START tool=nvmecli title="Re-enumeration latency" name=enum-latency x_type=probe x_name="Probe attempt" x_units=index x_values=1,2,3,4
+2026-04-21 12:00:41,003:[INFO    ][runner      ]  MI: GRAPH_SERIES type=latency name=enumerate description="Enumeration latency" units=ms values=120.0,95.0,80.0,72.0
+2026-04-21 12:00:41,003:[INFO    ][runner      ]  MI: GRAPH_END
 2026-04-21 12:00:41,004:[WARN    ][watchdog    ]  Recovery watchdog terminated the validation flow after timeout
 2026-04-21 12:00:41,005:[INFO    ][runner      ]  MI: RESULT status=KILLED expected=KILLED
 2026-04-21 12:00:41,006:[WARN    ][runner      ]  MI: VERDICT text="Watchdog kill was expected for this negative case"

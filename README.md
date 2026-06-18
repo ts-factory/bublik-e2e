@@ -10,8 +10,8 @@ fixture provider -> generate bundles -> write into --publish-dir (served at {url
 ```
 
 The tool is **instance-agnostic**: it targets any Bublik instance through
-`--url` plus the admin email/password, with no bublik-docker checkout required.
-Everything is configured via flags or environment variables.
+`--url` plus the admin email/password. Everything is configured via flags or
+environment variables.
 
 ## Install
 
@@ -19,9 +19,8 @@ A single package bundles the CLI engine and the `basic` / `dpdk` / `net-drv`
 providers:
 
 ```bash
-uv tool install https://github.com/<user>/bublik-e2e     # straight from git
-uv tool install .                                        # from a checkout
-uv tool install --force .                                # re-install during development
+uv tool install .            # from a checkout
+uv tool install --force .    # re-install during development
 ```
 
 This puts a `bublik-e2e` executable on your PATH. From a workspace checkout you
@@ -41,34 +40,7 @@ uv sync --frozen --group dev
 uv run ruff check src tests
 uv run ruff format --check tests
 uv run pytest
-uv build
-uvx twine check dist/*
 ```
-
-## CI and releases
-
-GitHub Actions runs Ruff, pytest, and package build checks on pull requests and
-pushes to `main`. Release tags publish the package and create GitHub Releases.
-
-One-time PyPI setup:
-
-1. Create or claim the `bublik-e2e` project on PyPI.
-2. Add a Trusted Publisher for the GitHub repository.
-3. Use workflow `.github/workflows/release.yml`.
-4. Use environment name `pypi`.
-
-To release:
-
-```bash
-# update [project].version in pyproject.toml first
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
-```
-
-The release workflow requires the tag to match `vX.Y.Z` and the tag version to
-match `pyproject.toml`. It builds wheel/sdist artifacts, publishes them to PyPI
-with Trusted Publishing, then creates a GitHub Release with generated notes and
-the built distributions attached.
 
 ## Commands
 
@@ -80,8 +52,8 @@ the built distributions attached.
 
 ### Configuration
 
-URL and credentials come from flags, falling back to the existing bublik-docker
-`.env` variable names (real env vars, or an explicit `--env-file`):
+URL and credentials come from flags, falling back to environment variables
+(real env vars, or an explicit `--env-file`):
 
 | Flag | Env fallback | Default |
 |------|--------------|---------|
@@ -99,14 +71,14 @@ and logs are then served at `{url}/auth`, `{url}/api/v2`, and `{url}/logs`.
 `--publish-dir` is a **full path** to the directory the target instance serves
 at `{url}/logs/<name>/`, where `<name>` is the directory's basename. A bundle
 `<id>` is written to `<publish-dir>/<id>` and imported from
-`{url}/logs/<name>/<id>/`. No layout is assumed — for a docker instance that
-serves its logs volume at `/logs`, point `--publish-dir` at
-`<data-dir>/logs/logs/e2e`, which is served at `{url}/logs/e2e/`.
+`{url}/logs/<name>/<id>/`. No layout is assumed — for an instance that serves
+its logs volume at `/logs`, point `--publish-dir` at `<data-dir>/logs/logs/e2e`,
+which is served at `{url}/logs/e2e/`.
 
 ## Usage
 
 Generate and publish bundles (omit `--fixture` to auto-discover every bundled
-provider; the example uses a docker logs volume as the publish target):
+provider):
 
 ```bash
 bublik-e2e generate \

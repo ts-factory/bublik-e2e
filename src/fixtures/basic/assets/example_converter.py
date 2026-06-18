@@ -337,6 +337,79 @@ def build_measurement(fields: Dict[str, str], node_name: str) -> dict:
     return measurement
 
 
+def parse_value_list(raw: str, field_name: str) -> List[float]:
+    values: List[float] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if chunk == "":
+            continue
+        try:
+            values.append(float(chunk))
+        except ValueError as exc:
+            raise ValueError(
+                f"{field_name} must be a comma-separated numeric list: {raw}"
+            ) from exc
+    if not values:
+        raise ValueError(f"{field_name} must contain at least one value")
+    return values
+
+
+def build_graph_measurement(graph: dict, node_name: str) -> dict:
+    """Build a multi-sample measurement carrying a line-graph view (a chart).
+
+    Unlike build_measurement, which emits a single point and an empty "views"
+    list, this produces one result series per axis plus a line-graph view, so
+    the measurement is rendered as a chart after import.
+    """
+    series = graph["series"]
+    if not series:
+        raise ValueError("GRAPH requires at least one GRAPH_SERIES")
+    length = len(graph["x_values"])
+    for item in series:
+        if len(item["values"]) != length:
+            raise ValueError(
+                f"GRAPH series '{item['name']}' has {len(item['values'])} value(s), "
+                f"expected {length} to match the x axis"
+            )
+
+    def entries(values: List[float], units: str) -> List[dict]:
+        return [
+            {"aggr": "single", "value": value, "base_units": units, "multiplier": 1}
+            for value in values
+        ]
+
+    x_result = {
+        "type": graph["x_type"],
+        "description": graph.get("x_name") or graph["x_type"],
+        "entries": entries(graph["x_values"], graph.get("x_units", "")),
+    }
+    series_results = [
+        {
+            "type": item["type"],
+            "name": item["name"],
+            "description": item.get("description") or item["name"],
+            "entries": entries(item["values"], item.get("units", "")),
+        }
+        for item in series
+    ]
+    view = {
+        "name": graph.get("view_name") or graph["title"],
+        "type": "line-graph",
+        "title": graph["title"],
+        "axis_x": {"type": graph["x_type"]},
+        "axis_y": [{"type": item["type"], "name": item["name"]} for item in series],
+    }
+    return {
+        "type": "measurement",
+        "version": 1,
+        "tool": graph["tool"],
+        "keys": {"Stage": graph.get("stage", node_name)},
+        "comments": {},
+        "results": [x_result, *series_results],
+        "views": [view],
+    }
+
+
 def close_node(node: Node, message: LogMessage, status: str) -> None:
     node.end_ts = message.bublik_ts
     normalized = ensure_status(status)
@@ -367,6 +440,7 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
     root: Optional[Node] = None
     current_test: Optional[Node] = None
     current_iteration: Optional[Node] = None
+    current_graph: Optional[dict] = None
     package_stack: List[Node] = []
     run_metas: List[dict] = []
     run_tags: Dict[str, str] = {}
@@ -569,6 +643,57 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
             add_measurement_event(target, message, build_measurement(fields, target.name))
             continue
 
+        if event == "GRAPH_START":
+            require_fields(event, fields, ["title", "x_type", "x_values"])
+            target = current_iteration or current_test
+            if target is None or (target.type == "pkg" and current_iteration is None):
+                raise ValueError("GRAPH_START requires an open iteration or leaf test")
+            if current_graph is not None:
+                raise ValueError("GRAPH_START encountered with an open graph")
+            current_graph = {
+                "tool": fields.get("tool", "raw-log-example"),
+                "title": fields["title"],
+                "view_name": fields.get("name"),
+                "stage": fields.get("stage", target.name),
+                "x_type": fields["x_type"],
+                "x_name": fields.get("x_name"),
+                "x_units": fields.get("x_units", ""),
+                "x_values": parse_value_list(fields["x_values"], "GRAPH_START x_values"),
+                "series": [],
+                "message": message,
+                "target": target,
+            }
+            continue
+
+        if event == "GRAPH_SERIES":
+            require_fields(event, fields, ["type", "name", "values"])
+            if current_graph is None:
+                raise ValueError("GRAPH_SERIES requires an open graph")
+            current_graph["series"].append(
+                {
+                    "type": fields["type"],
+                    "name": fields["name"],
+                    "description": fields.get("description"),
+                    "units": fields.get("units", ""),
+                    "values": parse_value_list(
+                        fields["values"], f"GRAPH_SERIES '{fields['name']}' values"
+                    ),
+                }
+            )
+            continue
+
+        if event == "GRAPH_END":
+            if current_graph is None:
+                raise ValueError("GRAPH_END requires an open graph")
+            target = current_graph["target"]
+            add_measurement_event(
+                target,
+                current_graph["message"],
+                build_graph_measurement(current_graph, target.name),
+            )
+            current_graph = None
+            continue
+
         if event == "ITERATION_END":
             require_fields(event, fields, ["name", "tin", "status"])
             if (
@@ -598,6 +723,8 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
         raise ValueError("RUN_START is required")
     if current_test or current_iteration or package_stack:
         raise ValueError("Raw log ended with unclosed scopes")
+    if current_graph is not None:
+        raise ValueError("Raw log ended with an open graph")
     if root.end_ts is None:
         root.end_ts = messages[-1].bublik_ts
     return root, run_metas, run_tags

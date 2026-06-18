@@ -250,6 +250,9 @@ def ensure_api_projects(
     projects = curl_json(f"{base_url}/api/v2/projects/", cookie_jar=cookie_jar)
     projects_by_name = {project["name"]: project for project in projects}
     project_names = sorted({bundle["project"] for bundle in manifest["bundles"]})
+    configs_by_project: dict[str, list[dict[str, Any]]] = {}
+    for config in manifest.get("configs", []):
+        configs_by_project.setdefault(config["project"], []).append(config)
     references = {
         "REVISIONS": {
             "TE_REV": {
@@ -289,6 +292,21 @@ def ensure_api_projects(
             },
             cookie_jar=cookie_jar,
         )
+
+        for config in configs_by_project.get(project_name, []):
+            curl_json(
+                f"{base_url}/api/v2/config/",
+                method="POST",
+                payload={
+                    "type": config["type"],
+                    "name": config["name"],
+                    "description": config.get("description", ""),
+                    "is_active": True,
+                    "content": config["content"],
+                    "project": project["id"],
+                },
+                cookie_jar=cookie_jar,
+            )
 
 
 def import_via_api(
