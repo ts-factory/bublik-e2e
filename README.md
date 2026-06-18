@@ -34,6 +34,42 @@ uv sync                      # creates .venv with the package installed editable
 uv run bublik-e2e --help
 ```
 
+Local checks mirror CI:
+
+```bash
+uv sync --frozen --group dev
+uv run ruff check src tests
+uv run ruff format --check tests
+uv run pytest
+uv build
+uvx twine check dist/*
+```
+
+## CI and releases
+
+GitHub Actions runs Ruff, pytest, and package build checks on pull requests and
+pushes to `main`. Release tags publish the package and create GitHub Releases.
+
+One-time PyPI setup:
+
+1. Create or claim the `bublik-e2e` project on PyPI.
+2. Add a Trusted Publisher for the GitHub repository.
+3. Use workflow `.github/workflows/release.yml`.
+4. Use environment name `pypi`.
+
+To release:
+
+```bash
+# update [project].version in pyproject.toml first
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow requires the tag to match `vX.Y.Z` and the tag version to
+match `pyproject.toml`. It builds wheel/sdist artifacts, publishes them to PyPI
+with Trusted Publishing, then creates a GitHub Release with generated notes and
+the built distributions attached.
+
 ## Commands
 
 | Command | Does | Talks to the API? |
