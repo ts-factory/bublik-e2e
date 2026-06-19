@@ -140,7 +140,11 @@ SetupProjectsOpt = Annotated[
 ]
 TimeoutOpt = Annotated[
     int,
-    typer.Option(help="Seconds to wait for the import job to finish."),
+    typer.Option(
+        help="Seconds to wait with no import progress before giving up. The "
+        "deadline resets on each completed or advancing run, so large batches "
+        "that keep moving never time out."
+    ),
 ]
 
 

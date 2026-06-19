@@ -34,6 +34,21 @@ def _conclusion_cell(spec: str) -> str:
     return f"[{style}]{label}[/]"
 
 
+# Map an upper-cased import status to a Rich style for the STATUS cell.
+_STATUS_STYLES: dict[str, str] = {
+    "SUCCESS": "green",
+    "DONE": "green",
+    "FAILURE": "red",
+    "RUNNING": "cyan",
+    "PENDING": "dim",
+}
+
+
+def _status_cell(status: str) -> str:
+    style = _STATUS_STYLES.get(status.upper(), "")
+    return f"[{style}]{status}[/]" if style else status
+
+
 def _count(value: int, style: str) -> str:
     """Dim zeros, color non-zero counts so the eye lands on real results."""
     if not value:
@@ -41,13 +56,21 @@ def _count(value: int, style: str) -> str:
     return f"[{style}]{value}[/]"
 
 
-def render_run_summary(
-    manifest: dict[str, Any], console: Console, *, title: str = "Runs"
-) -> None:
-    bundles = manifest.get("bundles", [])
-    if not bundles:
-        return
+def build_run_table(
+    bundles: list[dict[str, Any]],
+    *,
+    title: str = "Runs",
+    status_by_id: dict[str, str] | None = None,
+    base_url: str | None = None,
+    show_import_columns: bool = False,
+) -> Table:
+    """Build the run summary table, optionally with live import columns.
 
+    When ``show_import_columns`` is set, STATUS / RUN ID / LINK columns are added so
+    the same table can be driven live during import (see ``ProgressDisplay``). The
+    LINK cell is a clickable hyperlink to ``{base_url}/v2/runs/{runId}`` once the run
+    id is known.
+    """
     table = Table(
         title=f"{title} — {len(bundles)} run(s)",
         caption="[green]✓[/] expected  [red]✗[/] unexpected  •  "
@@ -63,6 +86,8 @@ def render_run_summary(
     table.add_column("RUN", style="bold", no_wrap=True)
     table.add_column("DATE", no_wrap=True)
     table.add_column("CONCLUSION", no_wrap=True)
+    if show_import_columns:
+        table.add_column("STATUS", no_wrap=True)
     table.add_column("TOTAL", justify="right")
     table.add_column("✓P", justify="right", header_style="green")
     table.add_column("✓F", justify="right", header_style="green")
@@ -71,6 +96,9 @@ def render_run_summary(
     table.add_column("✗F", justify="right", header_style="red")
     table.add_column("✗S", justify="right", header_style="red")
     table.add_column("ABN", justify="right", header_style="yellow")
+    if show_import_columns:
+        table.add_column("RUN ID", justify="right")
+        table.add_column("LINK", no_wrap=True)
 
     totals = {key: 0 for key in (
         "iter", "eP", "eF", "eS", "uP", "uF", "uS", "abn",
@@ -97,10 +125,15 @@ def render_run_summary(
         totals["uS"] += u_skip
         totals["abn"] += abnormal
 
-        table.add_row(
+        leading = [
             str(bundle.get("id", "")),
             str(bundle.get("date", "")),
             _conclusion_cell(str(bundle.get("conclusionSpec", ""))),
+        ]
+        if show_import_columns:
+            status = (status_by_id or {}).get(str(bundle.get("id", "")), "PENDING")
+            leading.append(_status_cell(status))
+        counts = [
             f"[bold]{iterations}[/]",
             _count(e_pass, "green"),
             _count(e_fail, "green"),
@@ -109,13 +142,23 @@ def render_run_summary(
             _count(u_fail, "red"),
             _count(u_skip, "red"),
             _count(abnormal, "yellow"),
-        )
+        ]
+        trailing = []
+        if show_import_columns:
+            run_id = bundle.get("runId")
+            trailing.append(str(run_id) if run_id else "-")
+            if run_id and base_url:
+                url = f"{base_url.rstrip('/')}/v2/runs/{run_id}"
+                trailing.append(f"[link={url}]{url}[/link]")
+            else:
+                trailing.append("-")
+        table.add_row(*leading, *counts, *trailing)
 
     if len(bundles) > 1:
-        table.add_row(
-            "[bold]TOTAL[/]",
-            "",
-            "",
+        leading = ["[bold]TOTAL[/]", "", ""]
+        if show_import_columns:
+            leading.append("")
+        counts = [
             f"[bold]{totals['iter']}[/]",
             _count(totals["eP"], "green"),
             _count(totals["eF"], "green"),
@@ -124,7 +167,17 @@ def render_run_summary(
             _count(totals["uF"], "red"),
             _count(totals["uS"], "red"),
             _count(totals["abn"], "yellow"),
-            end_section=True,
-        )
+        ]
+        trailing = ["", ""] if show_import_columns else []
+        table.add_row(*leading, *counts, *trailing, end_section=True)
 
-    console.print(table)
+    return table
+
+
+def render_run_summary(
+    manifest: dict[str, Any], console: Console, *, title: str = "Runs"
+) -> None:
+    bundles = manifest.get("bundles", [])
+    if not bundles:
+        return
+    console.print(build_run_table(bundles, title=title))

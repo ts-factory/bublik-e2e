@@ -21,13 +21,12 @@ from typing import Any
 import urllib.parse
 
 from rich.live import Live
-from rich.table import Table
 
 from core.common import CliError, console, normalize_url, read_json, write_json
 from core.constants import NOK_BORDERS, RUN_COMPLETE_FILE
 from core.manifest import generate_manifest
 from core.settings import Settings, resolve_manifest
-from core.summary import render_run_summary
+from core.summary import build_run_table
 
 # Manifest keys whose values embed the instance base URL (used when retargeting
 # an import at a different host than the manifest was generated against).
@@ -117,26 +116,19 @@ def resolve_deep_links(manifest: dict[str, Any]) -> None:
                 expected["logUrl"] = log_url
 
 
-# Map an upper-cased import status to a Rich style for the STATUS cell.
-_STATUS_STYLES = {
-    "SUCCESS": "green",
-    "DONE": "green",
-    "FAILURE": "red",
-    "RUNNING": "cyan",
-    "PENDING": "dim",
-}
-
-
 class ProgressDisplay:
     """Render a live per-run import status table via Rich.
 
     Used as a context manager around the import polling loop; ``Live`` is
     started on enter and stopped on exit (success, timeout, or error). Reads run
-    ids straight from the bundles; redraws are skipped when nothing changed.
+    ids straight from the bundles; redraws are skipped when nothing changed. The
+    table is the same run summary used elsewhere, extended with live STATUS / RUN
+    ID / LINK columns (see ``build_run_table``).
     """
 
-    def __init__(self, bundles: list[dict[str, Any]]) -> None:
+    def __init__(self, bundles: list[dict[str, Any]], base_url: str) -> None:
         self.bundles = bundles
+        self.base_url = base_url
         self.last_snapshot: tuple[Any, ...] | None = None
         self.live = Live(console=console, refresh_per_second=4, transient=False)
 
@@ -148,30 +140,23 @@ class ProgressDisplay:
         self.live.stop()
 
     def update(self, status_by_id: dict[str, str]) -> None:
-        rows = [
+        snapshot = tuple(
             (b["id"], status_by_id.get(b["id"], "PENDING"), b.get("runId"))
             for b in self.bundles
-        ]
-        snapshot = tuple(rows)
+        )
         if snapshot == self.last_snapshot:
             return
         self.last_snapshot = snapshot
-        self.live.update(self._table(rows))
-
-    def _table(self, rows: list[tuple[str, str, int | None]]) -> Table:
-        done = sum(1 for _, _, run_id in rows if run_id)
-        table = Table(title=f"Import progress: {done}/{len(rows)} imported")
-        table.add_column("RUN", style="bold")
-        table.add_column("STATUS")
-        table.add_column("RUN ID", justify="right")
-        for bid, status, run_id in rows:
-            style = _STATUS_STYLES.get(status.upper(), "")
-            table.add_row(
-                bid,
-                f"[{style}]{status}[/]" if style else status,
-                str(run_id) if run_id else "-",
+        done = sum(1 for *_, run_id in snapshot if run_id)
+        self.live.update(
+            build_run_table(
+                self.bundles,
+                title=f"Importing runs: {done}/{len(self.bundles)} imported",
+                status_by_id=status_by_id,
+                base_url=self.base_url,
+                show_import_columns=True,
             )
-        return table
+        )
 
 
 def persist_imported_runs(
@@ -181,14 +166,21 @@ def persist_imported_runs(
     job_id: int,
     timeout: int,
 ) -> None:
+    # ``timeout`` is a no-progress budget, not a total cap: the deadline is reset
+    # every time we observe the import advance (a new runId, or any per-task status
+    # transition). Bublik imports runs sequentially, so a large batch keeps moving
+    # for far longer than any fixed wall-clock limit would allow; we only give up
+    # once the job has been completely silent for ``timeout`` seconds (a stuck or
+    # dead worker).
     deadline = datetime.now().timestamp() + timeout
     bundles_by_url = {
         normalize_url(bundle["importUrl"]): bundle for bundle in manifest["bundles"]
     }
     status_by_id: dict[str, str] = {}
     last_payload: Any = None
+    prev_snapshot: tuple[Any, ...] | None = None
 
-    with ProgressDisplay(manifest["bundles"]) as display:
+    with ProgressDisplay(manifest["bundles"], base_url) as display:
         while datetime.now().timestamp() < deadline:
             try:
                 last_payload = curl_json(
@@ -212,6 +204,19 @@ def persist_imported_runs(
 
             display.update(status_by_id)
 
+            # Any change in completed runs or per-task status counts as progress and
+            # extends the no-progress deadline.
+            snapshot = (
+                sum(1 for bundle in manifest["bundles"] if bundle.get("runId")),
+                tuple(sorted(
+                    (task.get("run_source_url", ""), str(task.get("status", "")).upper())
+                    for task in (last_payload or [])
+                )),
+            )
+            if snapshot != prev_snapshot:
+                prev_snapshot = snapshot
+                deadline = datetime.now().timestamp() + timeout
+
             if all(bundle.get("runId") for bundle in manifest["bundles"]):
                 resolve_deep_links(manifest)
                 write_json(manifest_path, manifest, True)
@@ -231,9 +236,16 @@ def persist_imported_runs(
     missing = [
         bundle["id"] for bundle in manifest["bundles"] if not bundle.get("runId")
     ]
+    # Persist whatever run ids landed before the stall so a re-run can resume and the
+    # imported runs keep working deep-links.
+    saved_note = ""
+    if any(bundle.get("runId") for bundle in manifest["bundles"]):
+        resolve_deep_links(manifest)
+        write_json(manifest_path, manifest, True)
+        saved_note = "partial progress saved to manifest; "
     raise CliError(
-        f"timed out waiting for import job {job_id}; missing bundles: {missing}; "
-        f"last payload: {last_payload!r}"
+        f"timed out after {timeout}s with no import progress for job {job_id}; "
+        f"{saved_note}missing bundles: {missing}; last payload: {last_payload!r}"
     )
 
 
@@ -343,7 +355,7 @@ def ensure_api_projects(
             {"key": "unexpected", "label": "NOK", "payload": "go_run_failed"},
             {"key": "Notes", "payload": "go_bug"},
         ],
-        "METADATA_ON_PAGES": ["Configuration"],
+        "METADATA_ON_PAGES": ["Configuration", "Test Suite"],
         "RUN_COMPLETE_FILE": RUN_COMPLETE_FILE,
         "SPECIAL_CATEGORIES": ["Configuration"],
         "DASHBOARD_RUNS_SORT": ["start"],
@@ -423,6 +435,33 @@ def ensure_api_projects(
                 cookie_jar=cookie_jar,
             )
 
+    # Bring the default (project=None) per_conf in line with the per-project
+    # ones. It already exists from Bublik init, so a POST would be rejected by
+    # the unique (type, name, project) check; PATCH the active version instead,
+    # which creates a new version when the content differs and activates it.
+    existing_configs = curl_json(f"{base_url}/api/v2/config/", cookie_jar=cookie_jar)
+    default_per_conf = next(
+        (
+            config
+            for config in existing_configs
+            if config["type"] == "global"
+            and config["name"] == "per_conf"
+            and config["project"] is None
+        ),
+        None,
+    )
+    if default_per_conf is not None:
+        curl_json(
+            f"{base_url}/api/v2/config/{default_per_conf['id']}/",
+            method="PATCH",
+            payload={
+                "description": "Main project configuration",
+                "is_active": True,
+                "content": per_conf,
+            },
+            cookie_jar=cookie_jar,
+        )
+
 
 def import_via_api(
     args: argparse.Namespace, manifest: dict[str, Any], manifest_path: Path
@@ -436,8 +475,6 @@ def import_via_api(
     old_base = str(manifest.get("baseUrl", "")).rstrip("/")
     if old_base and old_base != base_url:
         retarget_manifest_urls(manifest, old_base, base_url)
-
-    render_run_summary(manifest, console, title="Importing runs")
 
     cookie_dir = Path(tempfile.mkdtemp(prefix="bublik-e2e-api-"))
     cookie_jar = cookie_dir / "cookies.txt"
