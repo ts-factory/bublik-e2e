@@ -1,21 +1,27 @@
-"""Synthetic dpdk-ethdev-ts fixture provider."""
+"""Synthetic dpdk-ethdev-ts fixture provider.
+
+Test objectives are authored here; the exact per-iteration ``params``/``reqs`` are
+sourced from a real run via ``real_data.REAL`` (see ``tools/gen_real_data.py``).
+"""
 
 from typing import Any
 
-from core.synthetic_fixture import Package, RunProfile, SyntheticFixture, TestFamily
+from core.synthetic_fixture import (
+    Package,
+    RunProfile,
+    SyntheticFixture,
+    TestFamily,
+    real_families,
+    real_family,
+)
+
+from fixtures.dpdk.real_data import REAL
 
 
 def families(objectives: dict[str, str]) -> tuple[TestFamily, ...]:
-    """Build one TestFamily per ``name -> objective`` mapping, preserving order."""
-    return tuple(TestFamily(name, objective) for name, objective in objectives.items())
+    """Build one TestFamily per ``name -> objective`` mapping, with real params/reqs."""
+    return real_families(REAL, objectives)
 
-
-queue_variants = tuple(
-    {"queue": str(queue), "nb_pkts": packets, "payload_len": payload}
-    for queue in range(2)
-    for packets in ("1", "32")
-    for payload in ("64", "1500")
-)
 
 # Objectives transcribed verbatim from the real dpdk-ethdev-ts run tree.
 usecase_objectives = {
@@ -392,31 +398,38 @@ def perf_measurement(tool: str, side: str, size: int) -> dict[str, Any]:
     }
 
 
+def _size_token(value: str) -> int:
+    """First integer in a perf size argument (real txpkts can be comma lists)."""
+    head = value.split(",", 1)[0].strip()
+    try:
+        return int(head, 0)
+    except ValueError:
+        return 64
+
+
 def perf_families(spec: dict[str, Any]) -> tuple[TestFamily, ...]:
-    """One leaf per (arg-val grouping x series x axis_x value) carrying measurements."""
-    overlay: tuple[str, ...] = spec["overlay"]
+    """One leaf per real iteration, carrying its exact params/reqs + a measurement.
+
+    Parameters and requirements come from the reference run; the measurement
+    (pps + throughput per Side) stays synthetic, derived from the iteration's
+    ``x_arg`` size so the DPDK performance report still resolves on real axes.
+    """
     families: list[TestFamily] = []
-    for grouping in spec["groupings"]:
-        for series_values in spec["series"]:
-            for size in PKT_SIZES:
-                params = {spec["x_arg"]: str(size)}
-                params.update(
-                    {arg: str(value) for arg, value in zip(overlay, series_values)}
-                )
-                params.update(grouping)
-                measurements = tuple(
-                    perf_measurement(spec["tool"], side, size)
-                    for side in spec["sides"]
-                )
-                families.append(
-                    TestFamily(
-                        spec["name"],
-                        spec["objective"],
-                        parameters=(params,),
-                        requirements=("PERFORMANCE",),
-                        measurements=measurements,
-                    )
-                )
+    for iteration in REAL.get(spec["name"], ()):
+        params = dict(iteration["params"])
+        size = _size_token(params.get(spec["x_arg"], "0"))
+        measurements = tuple(
+            perf_measurement(spec["tool"], side, size) for side in spec["sides"]
+        )
+        families.append(
+            TestFamily(
+                spec["name"],
+                spec["objective"],
+                parameters=(params,),
+                requirements=tuple(iteration.get("reqs", ())),
+                measurements=measurements,
+            )
+        )
     return tuple(families)
 
 
@@ -546,28 +559,18 @@ fixture = SyntheticFixture(
         "max_tx_queues": "2",
     },
     profiles=profiles,
+    tests=(real_family(REAL, "prologue", "Prepare the DPDK test environment."),),
     packages=(
-        Package(
-            name="prologue",
-            objective="Prepare the DPDK test environment.",
-            tests=(TestFamily("prologue", ""),),
-        ),
         Package(
             name="usecases",
             objective="Main use cases of the PMD",
             tests=(
-                TestFamily(
+                real_family(
+                    REAL,
                     "tx_burst_simple",
                     "Transmit packets using tmpl from the TX queue",
-                    queue_variants,
-                    ("X3-TR001",),
                 ),
-                TestFamily(
-                    "rx_burst_simple",
-                    "Receive a burst of packets",
-                    queue_variants,
-                    ("X3-TR002",),
-                ),
+                real_family(REAL, "rx_burst_simple", "Receive a burst of packets"),
                 *families(usecase_objectives),
             ),
         ),
@@ -584,7 +587,7 @@ fixture = SyntheticFixture(
         Package(
             name="representors",
             objective="Representors",
-            tests=(TestFamily("rep_prologue", ""),),
+            tests=(real_family(REAL, "rep_prologue", ""),),
         ),
         Package(
             name="perf",

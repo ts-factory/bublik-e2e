@@ -1,20 +1,31 @@
-"""Synthetic net-drv-ts fixture provider."""
+"""Synthetic net-drv-ts fixture provider.
 
-from core.synthetic_fixture import Package, RunProfile, SyntheticFixture, TestFamily
+Test objectives are authored here; the exact per-iteration ``params``/``reqs`` are
+sourced from a real run via ``real_data.REAL`` (see ``tools/gen_real_data.py``).
+"""
+
+from core.synthetic_fixture import (
+    Package,
+    RunProfile,
+    SyntheticFixture,
+    TestFamily,
+    real_family,
+)
+
+from fixtures.net_drv.real_data import REAL
+
+
+def one(name: str, objective: str) -> TestFamily:
+    """A single test, with real params/reqs sourced from the reference run."""
+    return real_family(REAL, name, objective)
 
 
 def families(names: str, objective: str) -> tuple[TestFamily, ...]:
     return tuple(
-        TestFamily(name, f"{objective}: {name.replace('_', ' ')}.")
+        real_family(REAL, name, f"{objective}: {name.replace('_', ' ')}.")
         for name in names.split()
     )
 
-
-packet_variants = tuple(
-    {"protocol": protocol, "payload_len": payload}
-    for protocol in ("udp", "tcp")
-    for payload in ("64", "512", "1500")
-)
 
 profiles = (
     RunProfile(
@@ -103,32 +114,14 @@ fixture = SyntheticFixture(
         "max_tx_queues": "2",
     },
     profiles=profiles,
+    tests=(one("prologue", "Initialize the network test rig."),),
     packages=(
-        Package(
-            name="prologue",
-            objective="Prepare Linux interfaces and test agents.",
-            tests=(TestFamily("prologue", "Initialize the network test rig."),),
-        ),
         Package(
             name="basic",
             objective="Validate fundamental Linux network driver operations.",
             tests=(
-                TestFamily(
-                    "rx_mode",
-                    "Validate receive mode changes and packet delivery.",
-                    tuple(
-                        {"mode": mode, "state": state}
-                        for mode in ("promisc", "allmulti")
-                        for state in ("on", "off")
-                    ),
-                    ("IP4",),
-                ),
-                TestFamily(
-                    "send_receive",
-                    "Exchange representative TCP and UDP traffic.",
-                    packet_variants,
-                    ("ETHERNET",),
-                ),
+                one("rx_mode", "Validate receive mode changes and packet delivery."),
+                one("send_receive", "Exchange representative TCP and UDP traffic."),
                 *families(
                     """
                     driver_info ethtool_reset_nic mac_change_tx mac_change_rx ping
@@ -162,18 +155,8 @@ fixture = SyntheticFixture(
             name="offload",
             objective="Exercise network stack and NIC offloads.",
             tests=(
-                TestFamily(
-                    "simple_csum",
-                    "Validate receive and transmit checksum offload.",
-                    packet_variants,
-                    ("CHECKSUM",),
-                ),
-                TestFamily(
-                    "tso",
-                    "Validate TCP segmentation offload.",
-                    tuple({"mss": value} for value in ("536", "1200", "1460")),
-                    ("TSO",),
-                ),
+                one("simple_csum", "Validate receive and transmit checksum offload."),
+                one("tso", "Validate TCP segmentation offload."),
                 *families(
                     "receive_offload vlan_filter",
                     "Validate a network offload",
@@ -200,12 +183,7 @@ fixture = SyntheticFixture(
             name="rx_path",
             objective="Validate receive-path behavior.",
             tests=(
-                TestFamily(
-                    "rx_fcs",
-                    "Check FCS handling with valid and damaged frames.",
-                    tuple({"frame": value} for value in ("valid", "bad-fcs")),
-                    ("RX_FCS",),
-                ),
+                one("rx_fcs", "Check FCS handling with valid and damaged frames."),
                 *families(
                     "rx_coalesce_usecs rx_coalesce_frames",
                     "Validate RX interrupt coalescing",

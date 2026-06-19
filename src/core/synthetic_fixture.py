@@ -24,6 +24,10 @@ class TestFamily:
     requirements: tuple[str, ...] = ()
     artifacts: tuple[str, ...] = ()
     measurements: tuple[dict[str, Any], ...] = ()
+    # Per-iteration requirements, aligned by index with ``parameters``. When set,
+    # it overrides ``requirements`` so each leaf can carry the exact requirement
+    # list of its real-world iteration. Empty means "use ``requirements`` for all".
+    iteration_requirements: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,41 @@ class RunProfile:
     kind: str
     metas: dict[str, str]
     tags: dict[str, str | None]
+
+
+# ---------------------------------------------------------------------------
+# Data-driven family builders. Fixtures keep authoring objectives inline but
+# source the exact per-iteration ``params``/``reqs`` from a generated ``REAL``
+# mapping (``{test_name: [{"params": {...}, "reqs": [...]}, ...]}``) produced by
+# ``tools/gen_real_data.py`` from real Bublik runs.
+# ---------------------------------------------------------------------------
+
+# Mapping of test name -> list of iterations, each ``{"params": ..., "reqs": ...}``.
+RealData = dict[str, list[dict[str, Any]]]
+
+
+def real_family(real: RealData, name: str, objective: str) -> TestFamily:
+    """Build one TestFamily for ``name`` from its real iterations.
+
+    Each real iteration becomes a leaf carrying that iteration's exact ``params``
+    and ``reqs``. Names absent from ``real`` fall back to a single param-less leaf.
+    """
+    iterations = real.get(name)
+    if not iterations:
+        return TestFamily(name, objective)
+    return TestFamily(
+        name,
+        objective,
+        parameters=tuple(dict(it["params"]) for it in iterations),
+        iteration_requirements=tuple(tuple(it.get("reqs", ())) for it in iterations),
+    )
+
+
+def real_families(real: RealData, objectives: dict[str, str]) -> tuple[TestFamily, ...]:
+    """Build a TestFamily per ``name -> objective`` mapping, preserving order."""
+    return tuple(
+        real_family(real, name, objective) for name, objective in objectives.items()
+    )
 
 
 def _node_status(node: dict[str, Any]) -> str:
@@ -237,6 +276,7 @@ class SyntheticFixture(BaseFixture):
         revision_url: str,
         packages: tuple[Package, ...],
         tags: dict[str, str | None],
+        tests: tuple[TestFamily, ...] = (),
         profiles: tuple[RunProfile, ...] = (),
         root_objective: str | None = None,
         report_configs: tuple[dict[str, Any], ...] = (),
@@ -246,6 +286,9 @@ class SyntheticFixture(BaseFixture):
         self.revision_meta = revision_meta
         self.revision_url = revision_url
         self.packages = packages
+        # Leaf tests emitted directly under the run root (e.g. a top-level
+        # ``prologue``), matching real suites that log these as tests, not packages.
+        self.tests = tests
         self.tags = tags
         self.profiles = profiles
         self.root_objective = root_objective
@@ -291,7 +334,7 @@ class SyntheticFixture(BaseFixture):
             )
 
         def make_leaf(
-            package_name: str,
+            path_prefix: list[str],
             family: TestFamily,
             parameters: dict[str, str],
             tin: int,
@@ -303,8 +346,13 @@ class SyntheticFixture(BaseFixture):
             elapsed += 2
             end_text, end_utc = timestamp(elapsed)
             elapsed += 1
-            path = [self.name, package_name, family.name]
+            path = [*path_prefix, family.name]
             identity = json.dumps([path, parameters, tin], sort_keys=True)
+            reqs = (
+                family.iteration_requirements[tin]
+                if family.iteration_requirements
+                else family.requirements
+            )
 
             result: dict[str, Any] = {
                 "status": "PASSED",
@@ -321,7 +369,7 @@ class SyntheticFixture(BaseFixture):
                 "test_id": test_id,
                 "plan_id": test_id,
                 "tin": tin,
-                "reqs": list(family.requirements),
+                "reqs": list(reqs),
                 "objective": family.objective,
                 "params": parameters,
                 "path": path,
@@ -333,10 +381,18 @@ class SyntheticFixture(BaseFixture):
                 "measurements": list(family.measurements),
             }
 
+        # Root-level leaf tests run first (e.g. a top-level prologue), so build them
+        # before the packages to keep the synthetic timeline in execution order.
+        root_test_nodes = [
+            make_leaf([self.name], family, parameters, tin)
+            for family in self.tests
+            for tin, parameters in enumerate(family.parameters)
+        ]
+
         package_nodes: list[dict[str, Any]] = []
         for package in self.packages:
             children = [
-                make_leaf(package.name, family, parameters, tin)
+                make_leaf([self.name, package.name], family, parameters, tin)
                 for family in package.tests
                 for tin, parameters in enumerate(family.parameters)
             ]
@@ -372,10 +428,11 @@ class SyntheticFixture(BaseFixture):
                 }
             )
 
+        child_nodes = root_test_nodes + package_nodes
         root = {
-            "iters": package_nodes,
-            "start_ts": package_nodes[0]["start_ts"],
-            "start_ts_utc": package_nodes[0]["start_ts_utc"],
+            "iters": child_nodes,
+            "start_ts": child_nodes[0]["start_ts"],
+            "start_ts_utc": child_nodes[0]["start_ts_utc"],
             "name": self.name,
             "type": "pkg",
             "hash": hashlib.md5(self.name.encode(), usedforsecurity=False).hexdigest(),
@@ -388,8 +445,8 @@ class SyntheticFixture(BaseFixture):
             "params": {},
             "path": [self.name],
             "path_str": self.name,
-            "end_ts": package_nodes[-1]["end_ts"],
-            "end_ts_utc": package_nodes[-1]["end_ts_utc"],
+            "end_ts": child_nodes[-1]["end_ts"],
+            "end_ts_utc": child_nodes[-1]["end_ts_utc"],
             "err": "",
             "obtained": {"result": {"status": "PASSED"}},
         }
