@@ -134,8 +134,8 @@ PasswordOpt = Annotated[
 SetupProjectsOpt = Annotated[
     bool,
     typer.Option(
-        help="Create any missing projects and the per-project 'references' "
-        "config before importing.",
+        help="Create any missing projects and the per-project 'references', "
+        "'meta', and 'per_conf' configs before importing.",
     ),
 ]
 TimeoutOpt = Annotated[

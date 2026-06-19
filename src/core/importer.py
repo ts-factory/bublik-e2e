@@ -24,6 +24,7 @@ from rich.live import Live
 from rich.table import Table
 
 from core.common import CliError, console, normalize_url, read_json, write_json
+from core.constants import NOK_BORDERS, RUN_COMPLETE_FILE
 from core.manifest import generate_manifest
 from core.settings import Settings, resolve_manifest
 from core.summary import render_run_summary
@@ -321,6 +322,38 @@ def ensure_api_projects(
             "set-patterns": ["CFG"],
         },
     }
+    per_conf = {
+        "EMAIL_FROM": "noreply@ts-factory.io",
+        "EMAIL_HOST": "localhost",
+        "EMAIL_PORT": 25,
+        "UI_VERSION": 2,
+        "EMAIL_ADMINS": ["bublik@ts-factory.io"],
+        "EMAIL_TIMEOUT": 60,
+        "EMAIL_USE_TLS": True,
+        "RUN_KEY_METAS": ["START_TIMESTAMP", "CFG"],
+        "DASHBOARD_DATE": "CAMPAIGN_DATE",
+        "RUN_STATUS_META": "RUN_STATUS",
+        "TAB_TITLE_PREFIX": "Main",
+        "DASHBOARD_COLUMNS": [
+            {"key": "Test Suite", "payload": "go_report"},
+            {"key": "Configuration", "payload": "go_run"},
+            {"key": "Status"},
+            {"key": "progress", "label": "Executed", "formatting": "percent"},
+            {"key": "total", "label": "Total", "payload": "go_log"},
+            {"key": "unexpected", "label": "NOK", "payload": "go_run_failed"},
+            {"key": "Notes", "payload": "go_bug"},
+        ],
+        "METADATA_ON_PAGES": ["Configuration"],
+        "RUN_COMPLETE_FILE": RUN_COMPLETE_FILE,
+        "SPECIAL_CATEGORIES": ["Configuration"],
+        "DASHBOARD_RUNS_SORT": ["start"],
+        "CSRF_TRUSTED_ORIGINS": [],
+        "DASHBOARD_DEFAULT_MODE": "two_days_two_columns",
+        "EMAIL_PROJECT_WATCHERS": [],
+        "RUN_STATUS_BY_NOK_BORDERS": list(NOK_BORDERS),
+        "FILES_TO_GENERATE_METADATA": ["meta_data.txt"],
+        "NOT_PERMISSION_REQUIRED_ACTIONS": [],
+    }
 
     for project_name in project_names:
         project = projects_by_name.get(project_name)
@@ -356,6 +389,20 @@ def ensure_api_projects(
                 "description": "Meta categorization configuration",
                 "is_active": True,
                 "content": meta,
+                "project": project["id"],
+            },
+            cookie_jar=cookie_jar,
+        )
+
+        curl_json(
+            f"{base_url}/api/v2/config/",
+            method="POST",
+            payload={
+                "type": "global",
+                "name": "per_conf",
+                "description": "Main project configuration",
+                "is_active": True,
+                "content": per_conf,
                 "project": project["id"],
             },
             cookie_jar=cookie_jar,
