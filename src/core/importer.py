@@ -26,7 +26,7 @@ from core.common import CliError, console, normalize_url, read_json, write_json
 from core.constants import NOK_BORDERS, RUN_COMPLETE_FILE
 from core.manifest import generate_manifest
 from core.settings import Settings, resolve_manifest
-from core.summary import build_run_table
+from core.summary import build_run_table, build_timing_summary, format_duration
 
 # Manifest keys whose values embed the instance base URL (used when retargeting
 # an import at a different host than the manifest was generated against).
@@ -165,7 +165,7 @@ def persist_imported_runs(
     base_url: str,
     job_id: int,
     timeout: int,
-) -> None:
+) -> dict[str, float]:
     # ``timeout`` is a no-progress budget, not a total cap: the deadline is reset
     # every time we observe the import advance (a new runId, or any per-task status
     # transition). Bublik imports runs sequentially, so a large batch keeps moving
@@ -177,6 +177,9 @@ def persist_imported_runs(
         normalize_url(bundle["importUrl"]): bundle for bundle in manifest["bundles"]
     }
     status_by_id: dict[str, str] = {}
+    # Wall-clock time each bundle first received a run id, used to attribute the
+    # sequential import's elapsed time to each fixture type in the final summary.
+    completed_at: dict[str, float] = {}
     last_payload: Any = None
     prev_snapshot: tuple[Any, ...] | None = None
 
@@ -198,6 +201,7 @@ def persist_imported_runs(
                 run_id = task.get("run_id")
                 if isinstance(run_id, int) and run_id > 0:
                     bundle["runId"] = run_id
+                    completed_at.setdefault(bundle["id"], datetime.now().timestamp())
                 status_by_id[bundle["id"]] = (
                     str(task.get("status", "") or "PENDING").upper()
                 )
@@ -220,7 +224,7 @@ def persist_imported_runs(
             if all(bundle.get("runId") for bundle in manifest["bundles"]):
                 resolve_deep_links(manifest)
                 write_json(manifest_path, manifest, True)
-                return
+                return completed_at
 
             failed = [
                 task
@@ -483,6 +487,7 @@ def import_via_api(
         if getattr(args, "setup_projects", False):
             ensure_api_projects(manifest, base_url, cookie_jar)
         query = urllib.parse.urlencode({"url": manifest["importUrl"]})
+        import_start = datetime.now().timestamp()
         response = curl_json(
             f"{base_url}/api/v2/importruns/source/?{query}",
             cookie_jar=cookie_jar,
@@ -493,11 +498,17 @@ def import_via_api(
     job_id = response.get("job_id")
     if not isinstance(job_id, int):
         raise CliError(f"import endpoint did not return a job_id: {response!r}")
-    persist_imported_runs(manifest_path, manifest, base_url, job_id, args.timeout)
+    completed_at = persist_imported_runs(
+        manifest_path, manifest, base_url, job_id, args.timeout
+    )
+    elapsed = datetime.now().timestamp() - import_start
     console.print(
         f"[green]✓[/] Imported {len(manifest['bundles'])} fixture runs via API job "
-        f"{job_id}"
+        f"{job_id} in {format_duration(elapsed)}"
     )
+    timing = build_timing_summary(manifest["bundles"], completed_at, import_start)
+    if timing is not None:
+        console.print(timing)
 
 
 def import_manifest(args: argparse.Namespace) -> None:
