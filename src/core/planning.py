@@ -73,13 +73,14 @@ def parse_mix_key(key: str) -> tuple[str, str]:
     )
 
 
-def parse_mix_entry(entry: str) -> tuple[str, list[MixValue]]:
-    parts = entry.split(None, 1)
-    if len(parts) != 2:
-        raise CliError("--mix must be NAME key=value[,key=value...]")
-    name, values_raw = parts
+def parse_mix_values(values_raw: str, sep: str = ",") -> list[MixValue]:
+    """Parse a ``sep``-separated list of ``key=value`` mix items.
+
+    Shared by named ``--mix`` definitions (comma-separated) and inline ``--day``
+    mixes (semicolon-separated, so the comma can keep separating day items).
+    """
     values: list[MixValue] = []
-    for item in values_raw.split(","):
+    for item in values_raw.split(sep):
         if not item.strip():
             continue
         if "=" not in item:
@@ -95,6 +96,25 @@ def parse_mix_entry(entry: str) -> tuple[str, list[MixValue]]:
         if value < 0:
             raise CliError(f"mix value cannot be negative: {item!r}")
         values.append(MixValue(key=key, value=value, is_percent=is_percent))
+    return values
+
+
+def parse_mix_entry(entry: str) -> tuple[str, list[MixValue]]:
+    """Parse a named ``--mix`` definition.
+
+    Preferred form is ``NAME:key=value,key=value`` (a single token). The older
+    space-separated ``NAME key=value,...`` form is still accepted; mix keys and
+    values never contain ``:``, so a colon unambiguously marks the name.
+    """
+    if ":" in entry:
+        name, values_raw = entry.split(":", 1)
+    else:
+        parts = entry.split(None, 1)
+        if len(parts) != 2:
+            raise CliError("--mix must be NAME:key=value[,key=value...]")
+        name, values_raw = parts
+    name = name.strip()
+    values = parse_mix_values(values_raw, sep=",")
     if not values:
         raise CliError(f"mix {name!r} does not contain any values")
     return name, values
@@ -108,34 +128,48 @@ def validate_conclusion(conclusion: str) -> None:
 
 def parse_day_entry(
     entry: str,
-) -> tuple[str, list[tuple[str | None, str, str | None, int]]]:
+) -> tuple[str, list[tuple[str | None, str, str | None, list[MixValue] | None, int]]]:
+    """Parse ``YYYY-MM-DD:[fixture.]conclusion[@mixref]=count,...``.
+
+    ``mixref`` is either a named ``--mix`` reference or an inline definition
+    ``key=val;key=val``; inline definitions are returned as parsed ``MixValue``
+    lists. The count is split off the right (``rsplit``) so inline ``=`` signs
+    in the mix do not confuse it.
+    """
     if ":" not in entry:
         raise CliError("--day must be YYYY-MM-DD:spec")
     date_raw, spec_raw = entry.split(":", 1)
     run_date = parse_date(date_raw.strip()).date().isoformat()
-    specs: list[tuple[str | None, str, str | None, int]] = []
+    specs: list[tuple[str | None, str, str | None, list[MixValue] | None, int]] = []
     for item in spec_raw.split(","):
         item = item.strip()
         if not item:
             continue
         if "=" not in item:
             raise CliError(f"invalid --day item {item!r}")
-        lhs, count_raw = [part.strip() for part in item.split("=", 1)]
+        lhs, count_raw = [part.strip() for part in item.rsplit("=", 1)]
         try:
             count = int(count_raw)
         except ValueError as exc:
             raise CliError(f"invalid run count {count_raw!r}") from exc
         if count < 0:
             raise CliError(f"run count cannot be negative: {item!r}")
-        mix_name = None
+        mix_name: str | None = None
+        mix_values: list[MixValue] | None = None
         if "@" in lhs:
-            lhs, mix_name = [part.strip() for part in lhs.split("@", 1)]
+            lhs, mix_ref = [part.strip() for part in lhs.split("@", 1)]
+            if "=" in mix_ref:
+                mix_values = parse_mix_values(mix_ref, sep=";")
+                if not mix_values:
+                    raise CliError(f"inline mix in {item!r} has no values")
+            else:
+                mix_name = mix_ref
         fixture_name = None
         conclusion = lhs
         if "." in lhs:
             fixture_name, conclusion = [part.strip() for part in lhs.split(".", 1)]
         validate_conclusion(conclusion)
-        specs.append((fixture_name, conclusion, mix_name, count))
+        specs.append((fixture_name, conclusion, mix_name, mix_values, count))
     return run_date, specs
 
 
@@ -153,16 +187,24 @@ def build_mixes(args: argparse.Namespace) -> dict[str, list[MixValue]]:
 def plan_from_days(
     args: argparse.Namespace,
     fixtures: dict[str, FixtureProvider],
+    mixes: dict[str, list[MixValue]],
 ) -> tuple[list[PlannedRun], list[str]]:
     planned: list[PlannedRun] = []
     empty_dates: list[str] = []
     day_index = 0
+    inline_index = 0
     for entry in args.day or []:
         run_date, specs = parse_day_entry(entry)
         if not specs:
             empty_dates.append(run_date)
             continue
-        for fixture_name, conclusion, mix_name, count in specs:
+        for fixture_name, conclusion, mix_name, mix_values, count in specs:
+            if mix_values is not None:
+                # Register the inline mix under a synthetic name so the manifest
+                # resolves it through the same mixes[...] lookup as named mixes.
+                mix_name = f"inline:{run_date}#{inline_index}"
+                mixes[mix_name] = mix_values
+                inline_index += 1
             names = [fixture_name] if fixture_name else list(fixtures)
             for name in names:
                 if name not in fixtures:
@@ -223,17 +265,23 @@ def plan_from_fill(
 def build_plan(
     args: argparse.Namespace,
     fixtures: dict[str, FixtureProvider],
+    mixes: dict[str, list[MixValue]],
 ) -> tuple[list[PlannedRun], list[str]]:
     if args.day and args.fill:
         raise CliError("--day and --fill are mutually exclusive")
-    if not args.runs or args.runs < 1:
-        raise CliError("--runs must be specified and greater than zero")
-    planned, empty_dates = (
-        plan_from_days(args, fixtures) if args.day else plan_from_fill(args, fixtures)
-    )
+    if args.day:
+        # The run count is derived from the day specs; --runs is optional here.
+        planned, empty_dates = plan_from_days(args, fixtures, mixes)
+    elif args.fill:
+        # --fill drives the loop count, so --runs is required in this mode.
+        if not args.runs or args.runs < 1:
+            raise CliError("--fill requires --runs greater than zero")
+        planned, empty_dates = plan_from_fill(args, fixtures)
+    else:
+        raise CliError("no runs planned; use --day or --fill with --dates")
     if not planned:
         raise CliError("no runs planned; use --day or --fill with --dates")
-    if len(planned) != args.runs:
+    if args.runs is not None and len(planned) != args.runs:
         raise CliError(
             f"--runs={args.runs} but fixture plan contains {len(planned)} runs"
         )

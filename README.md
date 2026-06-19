@@ -15,13 +15,16 @@ environment variables.
 
 ## Install
 
-A single package bundles the CLI engine and the `basic` / `dpdk` / `net-drv`
-providers:
+A single package bundles the CLI engine and the `basic` / `dpdk-ethdev-ts` /
+`net-drv-ts` providers (these names are what you reference in `--day` specs):
 
 ```bash
 uv tool install .            # from a checkout
 uv tool install --force .    # re-install during development
 ```
+
+Re-run `uv tool install --force .` (or `uv sync`) after changing the bundled
+providers' entry points so the renamed registrations take effect.
 
 This puts a `bublik-e2e` executable on your PATH. From a workspace checkout you
 can also run it without installing via `uv run bublik-e2e <command>`.
@@ -78,17 +81,31 @@ which is served at `{url}/logs/e2e/`.
 ## Usage
 
 Generate and publish bundles (omit `--fixture` to auto-discover every bundled
-provider):
+provider). The run count is derived from the `--day` specs, so `--runs` is not
+needed here:
 
 ```bash
 bublik-e2e generate \
   --url http://localhost:42000 \
   --publish-dir ./data/logs/logs/e2e \
-  --runs 6 \
-  --mix "warning-mix unexpectedFailed=20%,unexpectedSkipped=5%" \
-  --day "2026-04-21:ok=1,warning=1,error=1" \
-  --day "2026-04-23:nok-warning@warning-mix=1,nok-error=1,compromised=1"
+  --mix "warning-mix:unexpectedFailed=20%,unexpectedSkipped=5%" \
+  --day "2026-04-21:basic.ok=1,basic.warning=1,basic.error=1" \
+  --day "2026-04-23:dpdk-ethdev-ts.nok-warning@warning-mix=1,dpdk-ethdev-ts.nok-error=1,dpdk-ethdev-ts.compromised=1"
 ```
+
+A named `--mix` is only worth defining when reused across specs. For a one-off,
+inline the mix directly on the `--day` spec (`;`-separated, no pre-definition):
+
+```bash
+bublik-e2e generate \
+  --publish-dir ./data/logs/logs/e2e \
+  --day "2026-04-21:net-drv-ts.nok-warning@unexpectedFailed=20%;unexpectedSkipped=5%=2"
+```
+
+An unprefixed conclusion (e.g. `ok=1`) applies to **every** discovered fixture;
+prefix it with a fixture name (`basic.ok=1`) to scope it. Pass `--runs` only in
+`--fill` mode, or with `--day` as an optional assertion that the derived count
+matches.
 
 Import an existing manifest through the API:
 

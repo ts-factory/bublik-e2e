@@ -21,11 +21,12 @@ dev = [
 bublik-e2e = "cli:main"
 
 # Bundled fixture providers, discovered at runtime by core/discovery.py. The
-# group key is just a registry string; targets point at the flat modules.
+# group key matches each provider's fixture.name, which is what --day specs
+# reference; targets point at the flat modules.
 [project.entry-points."bublik_e2e.fixtures"]
 basic = "fixtures.basic.fixture:fixture"
-dpdk = "fixtures.dpdk.fixture:fixture"
-net-drv = "fixtures.net_drv.fixture:fixture"
+dpdk-ethdev-ts = "fixtures.dpdk.fixture:fixture"
+net-drv-ts = "fixtures.net_drv.fixture:fixture"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/core", "src/fixtures"]

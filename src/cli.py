@@ -61,10 +61,11 @@ FixtureOpt = Annotated[
     ),
 ]
 RunsOpt = Annotated[
-    int,
+    Optional[int],
     typer.Option(
-        help="Total number of runs to produce. Must equal the runs implied by "
-        "--day, or drive the loop count in --fill mode.",
+        help="Total number of runs to produce. Optional with --day (derived "
+        "from the day specs; if given, asserted to match). Required with --fill, "
+        "where it drives the loop count.",
     ),
 ]
 DayOpt = Annotated[
@@ -74,11 +75,11 @@ DayOpt = Annotated[
         help="Runs for one date. SPEC is a comma list of "
         "\\[fixture.]conclusion\\[@mix]=count. Conclusions: ok, nok-warning, "
         "nok-error, warning, error, running, busy, stopped, interrupted, "
-        "compromised. An unprefixed conclusion applies to EVERY discovered "
-        "fixture (so --runs must equal count x fixtures); prefix with a fixture "
-        "name to scope it (basic, dpdk-ethdev-ts, net-drv-ts). Attach a named "
-        "--mix with @mix to control unexpected ratios. Repeatable. Mutually "
-        "exclusive with --fill/--dates.",
+        "compromised. An unprefixed conclusion applies to every discovered "
+        "fixture; prefix with a fixture name (e.g. dpdk-ethdev-ts.ok) to scope "
+        "it. @mix is either a named --mix or an inline definition "
+        "key=val;key=val (e.g. @unexpectedFailed=20%;unexpectedSkipped=5%). "
+        "Repeatable. Mutually exclusive with --fill/--dates.",
     ),
 ]
 FillOpt = Annotated[
@@ -99,9 +100,11 @@ DatesOpt = Annotated[
 MixOpt = Annotated[
     Optional[List[str]],
     typer.Option(
-        metavar="NAME k=v,...",
+        metavar="NAME:k=v,...",
         help="Define a named result mix, e.g. "
-        "'warning-mix unexpectedFailed=20%,unexpectedSkipped=5%'. Repeatable.",
+        "'warning-mix:unexpectedFailed=20%,unexpectedSkipped=5%', then reference "
+        "it from a --day spec with @warning-mix. Repeatable. (For a one-off, "
+        "skip this and inline the mix on the --day spec.)",
     ),
 ]
 PublishDirOpt = Annotated[
@@ -143,23 +146,23 @@ TimeoutOpt = Annotated[
 
 GENERATE_EPILOG = """[bold]Examples[/]
 
-[dim]All bundled fixtures — counts apply per fixture (3 conclusions x 3 fixtures = 9):[/]
+[dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
-[cyan]bublik-e2e generate --runs 9 --day "2026-04-21:ok=1,warning=1,error=1" --publish-dir /srv/logs/e2e[/]
+[cyan]bublik-e2e generate --day "2026-04-21:basic.ok=2,dpdk-ethdev-ts.nok-warning=1" --publish-dir /srv/logs/e2e[/]
 
-[dim]Scope to one fixture so the plan matches --runs exactly:[/]
+[dim]Unprefixed conclusions apply to every discovered fixture:[/]
 
-[cyan]bublik-e2e generate --runs 10 --day "2026-04-21:basic.ok=7,basic.warning=2,basic.error=1" --publish-dir /srv/logs/e2e[/]
+[cyan]bublik-e2e generate --day "2026-04-21:ok=1,warning=1,error=1" --publish-dir /srv/logs/e2e[/]
 
-[dim]DPDK runs with NOK (unexpected) results:[/]
+[dim]Inline mix on a day spec (no pre-defined --mix):[/]
 
-[cyan]bublik-e2e generate --runs 5 --day "2026-04-21:dpdk-ethdev-ts.ok=3,dpdk-ethdev-ts.nok-warning=1,dpdk-ethdev-ts.nok-error=1" --publish-dir /srv/logs/e2e[/]
+[cyan]bublik-e2e generate --day "2026-04-21:net-drv-ts.nok-warning@unexpectedFailed=20%;unexpectedSkipped=5%=2" --publish-dir /srv/logs/e2e[/]
 
-[dim]net-drv NOK runs with an explicit unexpected percentage mix:[/]
+[dim]Named mix reused across day specs:[/]
 
-[cyan]bublik-e2e generate --runs 4 --mix "warning-mix unexpectedFailed=20%,unexpectedSkipped=5%" --day "2026-04-21:net-drv-ts.ok=2,net-drv-ts.nok-warning@warning-mix=2" --publish-dir /srv/logs/e2e[/]
+[cyan]bublik-e2e generate --mix "warning-mix:unexpectedFailed=20%,unexpectedSkipped=5%" --day "2026-04-21:dpdk-ethdev-ts.nok-warning@warning-mix=2" --publish-dir /srv/logs/e2e[/]
 
-[dim]Fill a whole month with one conclusion:[/]
+[dim]Fill a whole month with one conclusion (--runs drives the loop):[/]
 
 [cyan]bublik-e2e generate --runs 100 --fill ok --dates "2026-04-01..2026-04-30" --publish-dir /srv/logs/e2e[/]
 """
@@ -177,27 +180,19 @@ IMPORT_EPILOG = """[bold]Examples[/]
 
 RUN_EPILOG = """[bold]Examples[/]
 
-[dim]All bundled fixtures — counts apply per fixture (3 conclusions x 3 fixtures = 9):[/]
+[dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
-[cyan]bublik-e2e run --runs 9 --day "2026-04-21:ok=1,warning=1,error=1" --publish-dir /srv/logs/e2e --url http://localhost[/]
+[cyan]bublik-e2e run --day "2026-04-21:basic.ok=2,dpdk-ethdev-ts.nok-warning=1" --publish-dir /srv/logs/e2e --url http://localhost[/]
 
-[dim]Scope to one fixture so the plan matches --runs exactly:[/]
+[dim]Inline mix on a day spec (no pre-defined --mix):[/]
 
-[cyan]bublik-e2e run --runs 10 --day "2026-04-21:basic.ok=7,basic.warning=2,basic.error=1" --publish-dir /srv/logs/e2e --url http://localhost[/]
-
-[dim]DPDK runs with NOK (unexpected) results:[/]
-
-[cyan]bublik-e2e run --runs 5 --day "2026-04-21:dpdk-ethdev-ts.ok=3,dpdk-ethdev-ts.nok-warning=1,dpdk-ethdev-ts.nok-error=1" --publish-dir /srv/logs/e2e --url http://localhost[/]
-
-[dim]net-drv NOK runs with an explicit unexpected percentage mix:[/]
-
-[cyan]bublik-e2e run --runs 4 --mix "warning-mix unexpectedFailed=20%,unexpectedSkipped=5%" --day "2026-04-21:net-drv-ts.ok=2,net-drv-ts.nok-warning@warning-mix=2" --publish-dir /srv/logs/e2e --url http://localhost[/]
+[cyan]bublik-e2e run --day "2026-04-21:net-drv-ts.nok-warning@unexpectedFailed=20%;unexpectedSkipped=5%=2" --publish-dir /srv/logs/e2e --url http://localhost[/]
 
 [dim]Multi-day campaign across fixtures, creating projects on the way in:[/]
 
-[cyan]bublik-e2e run --runs 6 --setup-projects --day "2026-04-21:basic.ok=2,basic.nok-error=1" --day "2026-04-22:dpdk-ethdev-ts.ok=2,dpdk-ethdev-ts.nok-warning=1" --publish-dir /srv/logs/e2e --url http://localhost[/]
+[cyan]bublik-e2e run --setup-projects --day "2026-04-21:basic.ok=2,basic.nok-error=1" --day "2026-04-22:dpdk-ethdev-ts.ok=2,dpdk-ethdev-ts.nok-warning=1" --publish-dir /srv/logs/e2e --url http://localhost[/]
 
-[dim]Fill a whole month with one conclusion:[/]
+[dim]Fill a whole month with one conclusion (--runs drives the loop):[/]
 
 [cyan]bublik-e2e run --runs 100 --fill ok --dates "2026-04-01..2026-04-30" --setup-projects --publish-dir /srv/logs/e2e --url http://localhost[/]
 """
@@ -214,7 +209,7 @@ def _dispatch(func: Callable[[argparse.Namespace], None], **params: object) -> N
 
 @app.command(epilog=GENERATE_EPILOG)
 def generate(
-    runs: RunsOpt,
+    runs: RunsOpt = None,
     fixture: FixtureOpt = None,
     day: DayOpt = None,
     fill: FillOpt = None,
@@ -268,7 +263,7 @@ def import_(
 
 @app.command(epilog=RUN_EPILOG)
 def run(
-    runs: RunsOpt,
+    runs: RunsOpt = None,
     fixture: FixtureOpt = None,
     day: DayOpt = None,
     fill: FillOpt = None,

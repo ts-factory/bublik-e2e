@@ -252,7 +252,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
     log_url_template = settings.log_url_template
     fixtures = selected_fixtures(args)
     mixes = build_mixes(args)
-    planned_runs, empty_dates = build_plan(args, fixtures)
+    planned_runs, empty_dates = build_plan(args, fixtures, mixes)
     bundles: list[dict[str, Any]] = []
 
     if publish_dir.exists():
