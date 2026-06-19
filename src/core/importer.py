@@ -268,6 +268,59 @@ def ensure_api_projects(
             }
         ],
     }
+    meta = {
+        "Lab": {
+            "type": "label",
+            "set-patterns": ["fixture"],
+            "set-priority": 1,
+        },
+        "Mix": {
+            "type": "tag",
+            "set-comment": "Fixture under test",
+            "set-patterns": ["^mix$"],
+            "set-priority": 2,
+        },
+        "User": {
+            "type": "label",
+            "set-patterns": ["USER"],
+        },
+        "Device": {
+            "type": "tag",
+            "set-comment": "Fixture under test",
+            "set-patterns": ["^device$"],
+            "set-priority": 2,
+        },
+        "Status": {
+            "type": "label",
+            "set-patterns": ["RUN_STATUS"],
+        },
+        "Fixture": {
+            "type": "tag",
+            "set-comment": "Fixture under test",
+            "set-patterns": ["^fixture$"],
+            "set-priority": 2,
+        },
+        "Conclusion": {
+            "type": "tag",
+            "set-comment": "Test conclusion",
+            "set-patterns": ["^conclusion$"],
+            "set-priority": 2,
+        },
+        "Fixture Id": {
+            "type": "tag",
+            "set-comment": "Fixture under test",
+            "set-patterns": ["^fixture_id$"],
+            "set-priority": 2,
+        },
+        "Test Suite": {
+            "type": "label",
+            "set-patterns": ["TS_NAME"],
+        },
+        "Configuration": {
+            "type": "label",
+            "set-patterns": ["CFG"],
+        },
+    }
 
     for project_name in project_names:
         project = projects_by_name.get(project_name)
@@ -289,6 +342,20 @@ def ensure_api_projects(
                 "description": "E2E fixture logs references",
                 "is_active": True,
                 "content": references,
+                "project": project["id"],
+            },
+            cookie_jar=cookie_jar,
+        )
+
+        curl_json(
+            f"{base_url}/api/v2/config/",
+            method="POST",
+            payload={
+                "type": "global",
+                "name": "meta",
+                "description": "Meta categorization configuration",
+                "is_active": True,
+                "content": meta,
                 "project": project["id"],
             },
             cookie_jar=cookie_jar,
