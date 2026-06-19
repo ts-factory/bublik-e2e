@@ -34,19 +34,23 @@ def _conclusion_cell(spec: str) -> str:
     return f"[{style}]{label}[/]"
 
 
-# Map an upper-cased import status to a Rich style for the STATUS cell.
-_STATUS_STYLES: dict[str, str] = {
-    "SUCCESS": "green",
-    "DONE": "green",
-    "FAILURE": "red",
-    "RUNNING": "cyan",
-    "PENDING": "dim",
+# Map an upper-cased import status to a (label, Rich style) for the STATUS cell.
+# RECEIVED means "queued in the broker, not running" — Bublik imports one run at
+# a time, so it is shown dim as QUEUED to keep the single RUNNING row the only
+# one that reads as in progress.
+_STATUS_STYLES: dict[str, tuple[str, str]] = {
+    "SUCCESS": ("SUCCESS", "green"),
+    "DONE": ("DONE", "green"),
+    "FAILURE": ("FAILURE", "red"),
+    "RUNNING": ("RUNNING", "cyan"),
+    "RECEIVED": ("QUEUED", "dim"),
+    "PENDING": ("PENDING", "dim"),
 }
 
 
 def _status_cell(status: str) -> str:
-    style = _STATUS_STYLES.get(status.upper(), "")
-    return f"[{style}]{status}[/]" if style else status
+    label, style = _STATUS_STYLES.get(status.upper(), (status, ""))
+    return f"[{style}]{label}[/]" if style else label
 
 
 def _count(value: int, style: str) -> str:
