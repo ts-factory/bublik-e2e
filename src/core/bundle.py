@@ -67,12 +67,24 @@ def format_bublik_timestamp(value: datetime) -> str:
     return value.strftime("%Y.%m.%d %H:%M:%S.%f")[:-3]
 
 
+def quantize_ms(value: datetime) -> datetime:
+    """Drop sub-millisecond precision.
+
+    Bublik stores node times from the float ``*_ts_utc`` (microsecond precision)
+    but the ``*_ts`` string is millisecond-truncated. Quantizing the instant
+    before producing both keeps the two representations identical, so no
+    sub-millisecond gap survives to confuse the whole-day-only
+    ``fix_result_timestamps`` repair on import.
+    """
+    return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+
+
 def add_utc_timestamps(node: dict[str, Any], offset: timedelta) -> None:
     for key in ("start_ts", "end_ts"):
         value = node.get(key)
         if not value or f"{key}_utc" in node:
             continue
-        local = datetime.strptime(value, "%Y.%m.%d %H:%M:%S.%f")
+        local = quantize_ms(datetime.strptime(value, "%Y.%m.%d %H:%M:%S.%f"))
         node[f"{key}_utc"] = local.replace(tzinfo=timezone(offset)).timestamp()
 
     for child in node.get("iters") or []:
@@ -90,7 +102,9 @@ def rebase_timestamps(
         value = node.get(key)
         if not value:
             continue
-        rebased = new_root_start + (parse_bublik_timestamp(value) - original_root_start)
+        rebased = quantize_ms(
+            new_root_start + (parse_bublik_timestamp(value) - original_root_start)
+        )
         node[key] = format_bublik_timestamp(rebased)
         node[f"{key}_utc"] = rebased.replace(tzinfo=timezone(tz_offset)).timestamp()
 
@@ -130,9 +144,12 @@ def patch_bundle(
     bublik_data = read_json(bublik_path)
 
     meta_items = meta_data.setdefault("metas", [])
-    start_timestamp = iso_for_day(spec.run_date, int(spec.tags.get("ordinal", "0")))
-    start_datetime = datetime.fromisoformat(start_timestamp)
+    # iso_for_day only chooses the target date/offset the run is rebased onto.
+    target_start = iso_for_day(spec.run_date, int(spec.tags.get("ordinal", "0")))
+    start_datetime = datetime.fromisoformat(target_start)
     start_offset = start_datetime.utcoffset() or timedelta()
+    start_timestamp = target_start
+    finish_timestamp = target_start
     roots = bublik_data.get("iters") or []
     if roots:
         root = roots[0]
@@ -146,12 +163,12 @@ def patch_bundle(
         )
         bublik_data["start_ts"] = root.get("start_ts")
         bublik_data["end_ts"] = root.get("end_ts")
-        finish_timestamp = (
-            datetime.fromtimestamp(root["end_ts_utc"], tz=timezone(start_offset))
-            .isoformat(timespec="milliseconds")
-        )
-    else:
-        finish_timestamp = start_timestamp
+        # Derive run boundaries from the rebased root's own *_ts_utc — the exact
+        # float Bublik stores for the node — so run.start == first node start and
+        # run.finish == last node finish, with no millisecond-truncation gap.
+        run_tz = timezone(start_offset)
+        start_timestamp = datetime.fromtimestamp(root["start_ts_utc"], tz=run_tz).isoformat()
+        finish_timestamp = datetime.fromtimestamp(root["end_ts_utc"], tz=run_tz).isoformat()
     upsert_meta(meta_items, "PROJECT", spec.project)
     upsert_meta(meta_items, "RUN_STATUS", spec.metas.get("RUN_STATUS", "DONE"))
     upsert_meta(meta_items, "E2E_RUN_ID", spec.fixture_id, "label")

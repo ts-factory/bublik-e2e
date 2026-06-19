@@ -134,6 +134,10 @@ def bublik_ts_to_datetime(ts: str) -> datetime:
     return datetime.strptime(ts, BUBLIK_TS_FORMAT)
 
 
+def datetime_to_bublik_ts(dt: datetime) -> str:
+    return dt.strftime(BUBLIK_TS_FORMAT)[:-3]
+
+
 def bublik_ts_to_iso(ts: str) -> str:
     return bublik_ts_to_datetime(ts).replace(tzinfo=local_timezone()).isoformat(timespec="milliseconds")
 
@@ -744,11 +748,43 @@ def finalize_tree(root: Node) -> None:
         next_test_id += 1
         node.hash = stable_hash(node.name, node.params) if node.type == "test" else ""
         if node.end_ts is None:
-            node.end_ts = node.children[-1].end_ts if node.children else node.start_ts
+            # Use the chronological max child end, not the last child by list
+            # order, so a parent finish can never predate a child finish (which
+            # would make Bublik's whole-day-only fix_result_timestamps raise).
+            node.end_ts = max(
+                (child.end_ts for child in node.children if child.end_ts is not None),
+                default=node.start_ts,
+            )
         for child in node.children:
             walk(child, node.path)
 
     walk(root, [])
+
+
+def enforce_monotonic(root: Node) -> None:
+    """Clamp node timestamps so they never run backwards.
+
+    Real raw logs can record sub-second clock skew — a sibling iteration
+    starting a millisecond before the previous one ended, or a PACKAGE_END
+    predating a child TEST_END. Bublik's fix_result_timestamps only repairs
+    whole-day errors and raises on such tiny reversals, aborting the import.
+    Walking the tree in execution order (pre-order start, post-order finish)
+    and bumping any backwards timestamp up to the running maximum yields
+    non-decreasing start/finish times — equality is accepted by the importer —
+    while leaving already-ordered data untouched.
+    """
+
+    def walk(node: Node, lower_bound: datetime) -> datetime:
+        start = max(bublik_ts_to_datetime(node.start_ts), lower_bound)
+        node.start_ts = datetime_to_bublik_ts(start)
+        cursor = start
+        for child in node.children:
+            cursor = walk(child, cursor)
+        end = max(bublik_ts_to_datetime(node.end_ts), cursor) if node.end_ts else cursor
+        node.end_ts = datetime_to_bublik_ts(end)
+        return end
+
+    walk(root, bublik_ts_to_datetime(root.start_ts))
 
 
 def plan_for_node(node: Node) -> dict:
@@ -1047,6 +1083,7 @@ def main() -> None:
     messages = parse_messages(args.raw_log)
     root, run_metas, run_tags = parse_raw_log(messages)
     finalize_tree(root)
+    enforce_monotonic(root)
     write_bundle(root, run_metas, run_tags, args.raw_log, args.output_dir, args.project, args.pretty)
     print(args.output_dir)
 
