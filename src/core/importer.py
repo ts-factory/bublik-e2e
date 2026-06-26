@@ -20,11 +20,13 @@ import time as time_module
 from typing import Any
 import urllib.parse
 
+from pydantic import ValidationError
 from rich.live import Live
 
 from core.common import CliError, console, normalize_url, read_json, write_json
 from core.constants import NOK_BORDERS, RUN_COMPLETE_FILE
 from core.manifest import generate_manifest
+from core.manifest_models import Manifest
 from core.settings import Settings, resolve_manifest
 from core.summary import build_run_table, build_timing_summary, format_duration
 
@@ -516,8 +518,10 @@ def import_manifest(args: argparse.Namespace) -> None:
     if not manifest_path.is_file():
         raise CliError(f"manifest not found: {manifest_path}")
     manifest = read_json(manifest_path)
-    if manifest.get("version") != 1:
-        raise CliError("only fixture manifest version 1 is supported")
+    try:
+        Manifest.model_validate(manifest)
+    except ValidationError as exc:
+        raise CliError(f"manifest failed schema validation:\n{exc}") from exc
     import_via_api(args, manifest, manifest_path)
 
 

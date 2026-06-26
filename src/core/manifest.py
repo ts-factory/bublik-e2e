@@ -9,6 +9,8 @@ import shutil
 from typing import Any
 import urllib.parse
 
+from pydantic import ValidationError
+
 from core.bundle import (
     apply_mix,
     generate_bundle,
@@ -25,6 +27,7 @@ from core.constants import (
     RUN_STATUS_BY_CONCLUSION,
 )
 from core.discovery import selected_fixtures
+from core.manifest_models import Manifest
 from core.planning import build_mixes, build_plan
 from core.settings import Settings, resolve_manifest
 from core.summary import render_run_summary
@@ -358,6 +361,13 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
         "configs": configs,
         "bundles": bundles,
     }
+    # Validate the assembled manifest against the canonical schema before writing.
+    # We keep writing the original dict (byte-for-byte unchanged output); the model
+    # only guards shape — any drift raises here instead of reaching the UI.
+    try:
+        Manifest.model_validate(manifest)
+    except ValidationError as exc:
+        raise CliError(f"generated manifest failed schema validation:\n{exc}") from exc
     write_json(manifest_path, manifest, args.pretty)
     if show_summary:
         render_run_summary(manifest, console, title="Generated runs")
