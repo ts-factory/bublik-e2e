@@ -4,7 +4,8 @@ Deterministic Bublik fixture generation, publication, and API import, packaged
 as a single, standalone, installable CLI with all fixture providers bundled.
 
 ```text
-fixture provider -> generate bundles -> write into --publish-dir (served at {url}/logs/)
+fixture provider -> generate bundles -> validate bublik.json against a Draft 7 schema
+                 -> write into --publish-dir (served at {url}/logs/)
                  -> write manifest v1
                  -> import through the API (cookie auth)
 ```
@@ -64,6 +65,7 @@ URL and credentials come from flags, falling back to environment variables
 | `--email` | `DJANGO_SUPERUSER_EMAIL` | `admin@bublik.com` |
 | `--password` | `DJANGO_SUPERUSER_PASSWORD` | `admin` |
 | `--publish-dir` | `BUBLIK_E2E_PUBLISH_DIR` | *(required for generate/run)* |
+| `--run-log-schema` | `BUBLIK_E2E_RUN_LOG_SCHEMA` | *(required for generate/run)* |
 | `--manifest` | — | `./.e2e/e2e-manifest.json` |
 
 `--url` may include a path prefix (e.g. `http://localhost/bublik`); auth, API,
@@ -82,12 +84,20 @@ which is served at `{url}/logs/e2e/`.
 
 Generate and publish bundles (omit `--fixture` to auto-discover every bundled
 provider). The run count is derived from the `--day` specs, so `--runs` is not
-needed here:
+needed here. `generate` and `run` require Bublik's Draft 7 run-log schema; pass
+its path explicitly or set `BUBLIK_E2E_RUN_LOG_SCHEMA` (including in the file
+passed with `--env-file`). The CLI checks that the schema is readable, valid
+Draft 7 before clearing `--publish-dir`, then validates each finalized
+`bublik.json` after result mixes are applied and before deriving the manifest.
+
+Validation failures identify the bundle and schema paths and list deterministic
+JSON-pointer errors, capped at the first 20 errors:
 
 ```bash
 bublik-e2e generate \
   --url http://localhost:42000 \
   --publish-dir ./data/logs/logs/e2e \
+  --run-log-schema ../bublik-docker/bublik/bublik/data/schemas/run_log.json \
   --mix "warning-mix:unexpectedFailed=20%,unexpectedSkipped=5%" \
   --day "2026-04-21:basic.ok=1,basic.warning=1,basic.error=1" \
   --day "2026-04-23:dpdk-ethdev-ts.nok-warning@warning-mix=1,dpdk-ethdev-ts.nok-error=1,dpdk-ethdev-ts.compromised=1"
@@ -99,6 +109,7 @@ inline the mix directly on the `--day` spec (`;`-separated, no pre-definition):
 ```bash
 bublik-e2e generate \
   --publish-dir ./data/logs/logs/e2e \
+  --run-log-schema ../bublik-docker/bublik/bublik/data/schemas/run_log.json \
   --day "2026-04-21:net-drv-ts.nok-warning@unexpectedFailed=20%;unexpectedSkipped=5%=2"
 ```
 
@@ -115,14 +126,23 @@ bublik-e2e import \
   --email admin@bublik.com --password admin
 ```
 
-The API path logs in (`POST /auth/login/`, cookie session), schedules the
-collection at `/api/v2/importruns/source/`, polls `/api/v2/session_import/<job>/`
-while showing a live per-run status table, matches every imported source URL,
-writes `runId` values, and resolves the per-run deep links into the manifest.
+The API path logs in (`POST /auth/login/`, cookie session), reconciles the
+manifest against the instance's import history (`/api/v2/session_import/?url=`;
+already-imported bundles are skipped, stale `runId`s cleared), schedules one job
+per remaining bundle at `/api/v2/importruns/source/`, polls
+`/api/v2/session_import/<job>/` while showing a live per-run status table, writes
+`runId` values, and resolves the per-run deep links into the manifest. Because
+of the reconcile step, re-running `import` (or importing into an
+already-populated instance) is idempotent.
 
 Pass `--setup-projects` to create any missing projects and the per-project
 `references` config (with `LOGS_BASES` pointed at `{url}/logs/`) before importing
 — omit it to assume the instance is already configured.
+
+Runs planned with a `+ui` marker (e.g. `--day "2026-04-21:basic.ok+ui=1"`) get
+`importVia: "ui"` in the manifest and are **not** imported by the CLI — the
+Playwright suite imports them through the UI import form, which keeps that form
+itself under test. Pass `--include-ui` to pull them through the API anyway.
 
 Generate and immediately import:
 
@@ -132,11 +152,20 @@ bublik-e2e run \
   --email admin@bublik.com --password admin \
   --setup-projects \
   --publish-dir ./data/logs/logs/e2e \
+  --run-log-schema ../bublik-docker/bublik/bublik/data/schemas/run_log.json \
   --runs 100 --fill ok --dates "2026-04-01..2026-04-30"
 ```
 
 > UI import is **not** part of the CLI — it is handled by the Bublik Playwright
-> suite, which reads the manifest this tool writes.
+> suite, which reads the manifest this tool writes and imports the bundles
+> marked `importVia: "ui"`.
+
+Print the manifest JSON Schema (consumed by the UI repo's type codegen):
+
+```bash
+bublik-e2e schema                 # to stdout
+bublik-e2e schema --out schema.json
+```
 
 ## Package layout
 

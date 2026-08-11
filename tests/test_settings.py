@@ -13,6 +13,7 @@ def make_args(**overrides: object) -> argparse.Namespace:
         "email": None,
         "password": None,
         "publish_dir": None,
+        "run_log_schema": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -73,3 +74,27 @@ def test_settings_resolves_relative_publish_dir(monkeypatch, tmp_path: Path) -> 
     settings = Settings.from_args(make_args(publish_dir=Path("logs/e2e")))
 
     assert settings.publish_dir == tmp_path / "logs" / "e2e"
+
+
+def test_run_log_schema_uses_env_file_value(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BUBLIK_E2E_RUN_LOG_SCHEMA", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("BUBLIK_E2E_RUN_LOG_SCHEMA=schemas/run-log.json\n")
+
+    settings = Settings.from_args(make_args(env_file=env_file))
+
+    assert settings.run_log_schema == tmp_path / "schemas" / "run-log.json"
+
+
+def test_run_log_schema_cli_overrides_environment(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BUBLIK_E2E_RUN_LOG_SCHEMA", "env-schema.json")
+    env_file = tmp_path / ".env"
+    env_file.write_text("BUBLIK_E2E_RUN_LOG_SCHEMA=file-schema.json\n")
+
+    settings = Settings.from_args(
+        make_args(env_file=env_file, run_log_schema=Path("cli-schema.json"))
+    )
+
+    assert settings.run_log_schema == tmp_path / "cli-schema.json"

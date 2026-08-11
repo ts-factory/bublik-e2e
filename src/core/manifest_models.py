@@ -19,6 +19,50 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 
+FixtureConclusionSpec = Literal[
+    "ok",
+    "nok-warning",
+    "nok-error",
+    "warning",
+    "error",
+    "running",
+    "busy",
+    "stopped",
+    "interrupted",
+    "compromised",
+]
+IterationResultStatus = Literal[
+    "PASSED",
+    "FAILED",
+    "SKIPPED",
+    "KILLED",
+    "CORED",
+    "FAKED",
+    "INCOMPLETE",
+    "EMPTY",
+]
+RunStatus = Literal[
+    "DONE",
+    "WARNING",
+    "ERROR",
+    "RUNNING",
+    "BUSY",
+    "STOPPED",
+    "INTERRUPTED",
+]
+UIExpectedConclusion = Literal[
+    "run-ok",
+    "run-warning",
+    "run-error",
+    "run-running",
+    "run-busy",
+    "run-stopped",
+    "run-interrupted",
+    "run-compromised",
+]
+ExpectedStatusByNok = Literal["success", "warning", "error"]
+
+
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -33,21 +77,50 @@ class Revision(_Model):
 
 
 class MeasurementSummary(_Model):
-    """One flattened measurement entry across all leaf iterations."""
+    """One flattened measurement entry across all leaf iterations.
 
-    testPath: str | None = None
-    tool: str | None = None
-    metric: str | None = None
-    value: float | int | None = None
-    units: str | None = None
+    The generator always emits every key (values may be null), so all fields are
+    required; that keeps the schema honest and the generated TS types free of
+    spurious optionality.
+    """
+
+    testPath: str | None
+    tool: str | None
+    metric: str | None
+    value: float | int | None
+    units: str | None
 
 
 class PackageSummary(_Model):
     """Per top-level package status rollup."""
 
-    name: str | None = None
+    name: str | None
     total: int
     byStatus: dict[str, int]
+
+
+class ExpectedMatrix(_Model):
+    """Expected result counts per (expectation, result-type) cell.
+
+    Keys mirror ``core.constants.MATRIX_KEYS``; the generator always emits every
+    cell, so all fields are required.
+    """
+
+    expectedPassed: int
+    unexpectedPassed: int
+    expectedFailed: int
+    unexpectedFailed: int
+    expectedSkipped: int
+    unexpectedSkipped: int
+    expectedKilled: int
+    unexpectedKilled: int
+    expectedCored: int
+    unexpectedCored: int
+    expectedFaked: int
+    unexpectedFaked: int
+    expectedIncomplete: int
+    unexpectedIncomplete: int
+    abnormal: int
 
 
 class IterationEntry(_Model):
@@ -57,18 +130,18 @@ class IterationEntry(_Model):
     provider-shaped payloads and are intentionally left loose.
     """
 
-    name: str | None = None
-    tin: int | None = None
-    path: list[str] = []
-    pathStr: str = ""
-    params: dict[str, Any] = {}
-    reqs: list[str] = []
-    status: str
-    expectedStatus: str
+    name: str | None
+    tin: int | None
+    path: list[str]
+    pathStr: str
+    params: dict[str, Any]
+    reqs: list[str]
+    status: IterationResultStatus
+    expectedStatus: IterationResultStatus
     unexpected: bool
-    verdicts: list[Any] = []
-    artifacts: list[Any] = []
-    measurements: list[Any] = []
+    verdicts: list[Any]
+    artifacts: list[Any]
+    measurements: list[Any]
 
 
 class ExpectedRun(_Model):
@@ -77,17 +150,17 @@ class ExpectedRun(_Model):
     name: str
     dashboardDate: str
     iterationCount: int
-    expectedStatus: str
-    expectedStatusByNok: str
-    expectedConclusion: str
-    expectedConclusionReason: str | None = None
-    expectedMatrix: dict[str, int]
-    tags: dict[str, Any] = {}
-    requirements: list[str] = []
-    verdicts: list[str] = []
-    measurements: list[MeasurementSummary] = []
-    packages: list[PackageSummary] = []
-    sampleTests: dict[str, list[IterationEntry]] = {}
+    expectedStatus: RunStatus
+    expectedStatusByNok: ExpectedStatusByNok
+    expectedConclusion: UIExpectedConclusion
+    expectedConclusionReason: str | None
+    expectedMatrix: ExpectedMatrix
+    tags: dict[str, Any]
+    requirements: list[str]
+    verdicts: list[str]
+    measurements: list[MeasurementSummary]
+    packages: list[PackageSummary]
+    sampleTests: dict[str, list[IterationEntry]]
     # Resolved during import once the run id is known (core.importer).
     runUrl: str | None = None
     logUrl: str | None = None
@@ -98,17 +171,21 @@ class Bundle(_Model):
 
     id: str
     fixture: str
-    conclusionSpec: str
+    conclusionSpec: FixtureConclusionSpec
     mix: str
     date: str
     importUrl: str
+    # How the bundle reaches the instance: "api" bundles are imported by the
+    # CLI (`bublik-e2e import`); "ui" bundles are left for the Playwright suite
+    # to import through the UI, exercising the import form itself.
+    importVia: Literal["api", "ui"] = "api"
     project: str
     e2eRunId: str
-    runStatus: str | None = None
-    startTimestamp: str | None = None
-    finishTimestamp: str | None = None
-    tags: dict[str, Any] = {}
-    revisions: list[Revision] = []
+    runStatus: RunStatus | None
+    startTimestamp: str | None
+    finishTimestamp: str | None
+    tags: dict[str, Any]
+    revisions: list[Revision]
     runUrlTemplate: str
     logUrlTemplate: str
     expectedRuns: list[ExpectedRun]
@@ -124,7 +201,7 @@ class ReportConfig(_Model):
     project: str
     type: Literal["report"]
     name: str
-    description: str = ""
+    description: str
     content: dict[str, Any]
 
 
@@ -138,9 +215,9 @@ class Manifest(_Model):
     dashboardUrl: str
     historyUrl: str
     importUrl: str
-    emptyDates: list[str] = []
-    configs: list[ReportConfig] = []
-    bundles: list[Bundle] = []
+    emptyDates: list[str]
+    configs: list[ReportConfig]
+    bundles: list[Bundle]
 
 
 def _strip_titles(node: Any) -> None:

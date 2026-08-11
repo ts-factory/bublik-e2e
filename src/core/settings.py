@@ -9,6 +9,8 @@ ones (``BUBLIK_FQDN``, ``BUBLIK_DOCKER_PROXY_PORT``, ``URL_PREFIX``,
 carries over unchanged. The publish directory is an explicit full path
 (``--publish-dir`` / ``BUBLIK_E2E_PUBLISH_DIR``); nothing is assumed about its
 layout.
+The run-log schema is likewise explicit (``--run-log-schema`` /
+``BUBLIK_E2E_RUN_LOG_SCHEMA``) and mandatory for commands that generate bundles.
 """
 
 from __future__ import annotations
@@ -55,6 +57,7 @@ class Settings:
     email_override: str | None = None
     password_override: str | None = None
     publish_dir_override: Path | None = None
+    run_log_schema_override: Path | None = None
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "Settings":
@@ -69,6 +72,7 @@ class Settings:
             email_override=getattr(args, "email", None),
             password_override=getattr(args, "password", None),
             publish_dir_override=getattr(args, "publish_dir", None),
+            run_log_schema_override=getattr(args, "run_log_schema", None),
         )
 
     def get(self, key: str, default: str | None = None) -> str | None:
@@ -78,7 +82,9 @@ class Settings:
 
     @property
     def email(self) -> str:
-        return self.email_override or self.get("DJANGO_SUPERUSER_EMAIL") or DEFAULT_EMAIL
+        return (
+            self.email_override or self.get("DJANGO_SUPERUSER_EMAIL") or DEFAULT_EMAIL
+        )
 
     @property
     def password(self) -> str:
@@ -107,6 +113,17 @@ class Settings:
             return None
         # Resolve to absolute: fixtures may shell out with their own cwd, so a
         # relative bundle path would be written in the wrong place.
+        path = Path(raw)
+        return path if path.is_absolute() else Path.cwd() / path
+
+    @property
+    def run_log_schema(self) -> Path | None:
+        raw = self.run_log_schema_override
+        if raw is None:
+            env = self.get("BUBLIK_E2E_RUN_LOG_SCHEMA")
+            raw = Path(env) if env else None
+        if raw is None:
+            return None
         path = Path(raw)
         return path if path.is_absolute() else Path.cwd() / path
 

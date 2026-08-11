@@ -12,6 +12,7 @@ Bundled fixtures: basic, dpdk-ethdev-ts, net-drv-ts.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Annotated, Callable, List, Optional
 
@@ -20,6 +21,7 @@ import typer
 from core.common import CliError, console
 from core.importer import generate_and_import, import_manifest
 from core.manifest import generate_manifest
+from core.manifest_models import manifest_json_schema
 
 app = typer.Typer(
     rich_markup_mode="rich",
@@ -73,7 +75,9 @@ DayOpt = Annotated[
     typer.Option(
         metavar="YYYY-MM-DD:SPEC",
         help="Runs for one date. SPEC is a comma list of "
-        "\\[fixture.]conclusion\\[@mix]=count. Conclusions: ok, nok-warning, "
+        "\\[fixture.]conclusion\\[@mix]\\[+ui]=count. A trailing +ui marks the "
+        "runs for import through the UI (Playwright) instead of the CLI API "
+        "import. Conclusions: ok, nok-warning, "
         "nok-error, warning, error, running, busy, stopped, interrupted, "
         "compromised. An unprefixed conclusion applies to every discovered "
         "fixture; prefix with a fixture name (e.g. dpdk-ethdev-ts.ok) to scope "
@@ -119,6 +123,13 @@ PrettyOpt = Annotated[
     bool,
     typer.Option(help="Pretty-print generated JSON (indented, sorted keys)."),
 ]
+RunLogSchemaOpt = Annotated[
+    Optional[Path],
+    typer.Option(
+        help="Draft 7 JSON Schema used to validate each finalized bublik.json. "
+        "Required unless BUBLIK_E2E_RUN_LOG_SCHEMA is set."
+    ),
+]
 
 # Auth
 EmailOpt = Annotated[
@@ -146,9 +157,19 @@ TimeoutOpt = Annotated[
         "that keep moving never time out."
     ),
 ]
+IncludeUiOpt = Annotated[
+    bool,
+    typer.Option(
+        "--include-ui",
+        help="Also import bundles marked importVia=ui (normally left for the "
+        "Playwright suite to import through the UI).",
+    ),
+]
 
 
 GENERATE_EPILOG = """[bold]Examples[/]
+
+[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA points to a Draft 7 run-log schema.[/]
 
 [dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
@@ -183,6 +204,8 @@ IMPORT_EPILOG = """[bold]Examples[/]
 """
 
 RUN_EPILOG = """[bold]Examples[/]
+
+[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA points to a Draft 7 run-log schema.[/]
 
 [dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
@@ -221,6 +244,7 @@ def generate(
     mix: MixOpt = None,
     publish_dir: PublishDirOpt = None,
     pretty: PrettyOpt = False,
+    run_log_schema: RunLogSchemaOpt = None,
     url: UrlOpt = None,
     env_file: EnvFileOpt = None,
     manifest: ManifestOpt = None,
@@ -239,6 +263,7 @@ def generate(
         mix=mix or [],
         publish_dir=publish_dir,
         pretty=pretty,
+        run_log_schema=run_log_schema,
     )
 
 
@@ -251,6 +276,7 @@ def import_(
     password: PasswordOpt = None,
     setup_projects: SetupProjectsOpt = False,
     timeout: TimeoutOpt = 600,
+    include_ui: IncludeUiOpt = False,
 ) -> None:
     """Import an existing manifest into the instance via the API."""
     _dispatch(
@@ -262,6 +288,7 @@ def import_(
         password=password,
         setup_projects=setup_projects,
         timeout=timeout,
+        include_ui=include_ui,
     )
 
 
@@ -275,6 +302,7 @@ def run(
     mix: MixOpt = None,
     publish_dir: PublishDirOpt = None,
     pretty: PrettyOpt = False,
+    run_log_schema: RunLogSchemaOpt = None,
     url: UrlOpt = None,
     env_file: EnvFileOpt = None,
     manifest: ManifestOpt = None,
@@ -282,6 +310,7 @@ def run(
     password: PasswordOpt = None,
     setup_projects: SetupProjectsOpt = False,
     timeout: TimeoutOpt = 600,
+    include_ui: IncludeUiOpt = False,
 ) -> None:
     """Generate bundles and import them in one shot (generate + import)."""
     _dispatch(
@@ -297,11 +326,30 @@ def run(
         mix=mix or [],
         publish_dir=publish_dir,
         pretty=pretty,
+        run_log_schema=run_log_schema,
         email=email,
         password=password,
         setup_projects=setup_projects,
         timeout=timeout,
+        include_ui=include_ui,
     )
+
+
+@app.command()
+def schema(
+    out: Annotated[
+        Optional[Path],
+        typer.Option(help="Write the schema to this file instead of stdout."),
+    ] = None,
+) -> None:
+    """Print the manifest JSON Schema (for downstream TypeScript codegen)."""
+    rendered = json.dumps(manifest_json_schema(), indent=2, sort_keys=True) + "\n"
+    if out is None:
+        print(rendered, end="")
+        return
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(rendered, encoding="utf-8")
+    print(str(out))
 
 
 def main() -> None:

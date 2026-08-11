@@ -226,7 +226,9 @@ xmit_objectives = {
 
 _FLOW_FILTER = "Verify Flow API by adding a filter and inspecting the inbound traffic"
 _FLOW_DROP = "Make sure that RTE flow API DROP action is carried out correctly"
-_FLOW_MARK = "Make sure that RTE flow API MARK and FLAG actions are carried out correctly"
+_FLOW_MARK = (
+    "Make sure that RTE flow API MARK and FLAG actions are carried out correctly"
+)
 
 filter_objectives = {
     "flow_rule_in2q": _FLOW_FILTER,
@@ -383,7 +385,12 @@ def perf_measurement(tool: str, side: str, size: int) -> dict[str, Any]:
             "name": rtype,
             "description": f"{side} {rtype}",
             "entries": [
-                {"aggr": "mean", "value": value, "base_units": units, "multiplier": 1}
+                {
+                    "aggr": "mean",
+                    "value": value,
+                    "base_units": units,
+                    "multiplier": "1",
+                }
             ],
         }
 
@@ -594,11 +601,7 @@ fixture = SyntheticFixture(
             objective="Performance",
             tests=(
                 *families(perf_objectives),
-                *(
-                    family
-                    for spec in PERF_CHARTS
-                    for family in perf_families(spec)
-                ),
+                *(family for spec in PERF_CHARTS for family in perf_families(spec)),
             ),
         ),
     ),

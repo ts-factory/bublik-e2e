@@ -3,8 +3,16 @@
 Authentication is a cookie session: POST ``/auth/login/`` with the admin
 email/password, then reuse the cookie jar for every ``/api/v2/...`` call. The
 target instance, credentials, and (optional) project/config setup are all driven
-by CLI flags. UI import is intentionally not handled here — it lives in the
-Playwright suite.
+by CLI flags.
+
+The import is per-bundle: each bundle's ``importUrl`` is scheduled as its own
+job, after reconciling the manifest's ``runId`` values against the instance's
+import history (already-imported bundles are skipped, stale ids cleared). This
+makes re-runs and imports into an already-populated instance idempotent.
+
+Bundles marked ``importVia: ui`` are left for the Playwright suite, which
+imports them through the UI import form (and thereby tests it); pass
+``--include-ui`` to pull them through the API anyway.
 """
 
 from __future__ import annotations
@@ -72,7 +80,9 @@ def curl_json(
     try:
         status = int(status_raw)
     except ValueError as exc:
-        raise CliError(f"invalid HTTP status returned for {url}: {status_raw!r}") from exc
+        raise CliError(
+            f"invalid HTTP status returned for {url}: {status_raw!r}"
+        ) from exc
     if status < 200 or status >= 300:
         raise CliError(f"HTTP {status} returned by {url}: {body.strip()}")
     try:
@@ -87,8 +97,13 @@ def retarget_manifest_urls(manifest: dict[str, Any], old: str, new: str) -> None
     Only the documented URL keys are touched (not every string in the tree), so
     unrelated values that happen to contain the old host are never clobbered.
     """
+
     def swap(value: Any) -> Any:
-        return value.replace(old, new) if isinstance(value, str) and old in value else value
+        return (
+            value.replace(old, new)
+            if isinstance(value, str) and old in value
+            else value
+        )
 
     for key in _TOP_URL_KEYS:
         if key in manifest:
@@ -161,69 +176,146 @@ class ProgressDisplay:
         )
 
 
+def find_existing_run_id(
+    base_url: str, import_url: str, cookie_jar: Path | None = None
+) -> int | None:
+    """Look up a previously imported run id for ``import_url``, if any.
+
+    Queries the import-event log (``session_import``) filtered by source URL and
+    returns the first task that produced a run id. Used to reconcile the manifest
+    against the database before scheduling: already-imported bundles are skipped,
+    and stale ``runId`` values from a previous stack are cleared.
+    """
+    query = urllib.parse.urlencode({"url": import_url, "page_size": 10000})
+    try:
+        payload = curl_json(
+            f"{base_url}/api/v2/session_import/?{query}", cookie_jar=cookie_jar
+        )
+    except CliError:
+        return None
+    results = payload.get("results", []) if isinstance(payload, dict) else []
+    expected = normalize_url(import_url)
+    for task in results:
+        if normalize_url(str(task.get("run_source_url", ""))) != expected:
+            continue
+        run_id = task.get("run_id")
+        if isinstance(run_id, int) and run_id > 0:
+            return run_id
+    return None
+
+
+def reconcile_run_ids(
+    manifest: dict[str, Any], base_url: str, cookie_jar: Path | None = None
+) -> None:
+    """Refresh every bundle's ``runId`` from the database, in place.
+
+    The database is the source of truth: a ``runId`` left in the manifest from a
+    previous import is stale once the stack is brought up fresh, so values the
+    database no longer has are cleared rather than trusted.
+    """
+    for bundle in manifest["bundles"]:
+        bundle["runId"] = find_existing_run_id(
+            base_url, bundle["importUrl"], cookie_jar
+        )
+
+
+def schedule_import(base_url: str, import_url: str, cookie_jar: Path) -> int:
+    query = urllib.parse.urlencode({"url": import_url})
+    response = curl_json(
+        f"{base_url}/api/v2/importruns/source/?{query}", cookie_jar=cookie_jar
+    )
+    job_id = response.get("job_id") if isinstance(response, dict) else None
+    if not isinstance(job_id, int):
+        raise CliError(
+            f"import endpoint did not return a job_id for {import_url}: {response!r}"
+        )
+    return job_id
+
+
 def persist_imported_runs(
     manifest_path: Path,
     manifest: dict[str, Any],
     base_url: str,
-    job_id: int,
+    jobs: dict[str, int],
     timeout: int,
 ) -> dict[str, float]:
     # ``timeout`` is a no-progress budget, not a total cap: the deadline is reset
     # every time we observe the import advance (a new runId, or any per-task status
     # transition). Bublik imports runs sequentially, so a large batch keeps moving
     # for far longer than any fixed wall-clock limit would allow; we only give up
-    # once the job has been completely silent for ``timeout`` seconds (a stuck or
+    # once the jobs have been completely silent for ``timeout`` seconds (a stuck or
     # dead worker).
     deadline = datetime.now().timestamp() + timeout
+    # Only the bundles scheduled in ``jobs`` are waited for; bundles that already
+    # had a runId (reconciled) or are reserved for UI import are not polled.
+    target_bundles = [bundle for bundle in manifest["bundles"] if bundle["id"] in jobs]
     bundles_by_url = {
-        normalize_url(bundle["importUrl"]): bundle for bundle in manifest["bundles"]
+        normalize_url(bundle["importUrl"]): bundle for bundle in target_bundles
     }
     status_by_id: dict[str, str] = {}
     # Wall-clock time each bundle first received a run id, used to attribute the
     # sequential import's elapsed time to each fixture type in the final summary.
     completed_at: dict[str, float] = {}
-    last_payload: Any = None
+    last_payload: list[Any] = []
     prev_snapshot: tuple[Any, ...] | None = None
 
-    with ProgressDisplay(manifest["bundles"], base_url) as display:
+    with ProgressDisplay(target_bundles, base_url) as display:
         while datetime.now().timestamp() < deadline:
-            try:
-                last_payload = curl_json(
-                    f"{base_url}/api/v2/session_import/{job_id}/"
-                )
-            except CliError:
-                last_payload = None
+            # One job per bundle: poll only the jobs whose bundle is still
+            # missing a runId, and merge their task lists into a single payload.
+            last_payload = []
+            polled = False
+            for bundle in target_bundles:
+                if bundle.get("runId"):
+                    continue
+                try:
+                    last_payload.extend(
+                        curl_json(
+                            f"{base_url}/api/v2/session_import/{jobs[bundle['id']]}/"
+                        )
+                    )
+                    polled = True
+                except CliError:
+                    continue
+            if not polled:
                 time_module.sleep(1)
                 continue
 
             for task in last_payload:
-                bundle = bundles_by_url.get(normalize_url(task.get("run_source_url", "")))
+                bundle = bundles_by_url.get(
+                    normalize_url(task.get("run_source_url", ""))
+                )
                 if bundle is None or bundle.get("runId"):
                     continue
                 run_id = task.get("run_id")
                 if isinstance(run_id, int) and run_id > 0:
                     bundle["runId"] = run_id
                     completed_at.setdefault(bundle["id"], datetime.now().timestamp())
-                status_by_id[bundle["id"]] = (
-                    str(task.get("status", "") or "PENDING").upper()
-                )
+                status_by_id[bundle["id"]] = str(
+                    task.get("status", "") or "PENDING"
+                ).upper()
 
             display.update(status_by_id)
 
             # Any change in completed runs or per-task status counts as progress and
             # extends the no-progress deadline.
             snapshot = (
-                sum(1 for bundle in manifest["bundles"] if bundle.get("runId")),
-                tuple(sorted(
-                    (task.get("run_source_url", ""), str(task.get("status", "")).upper())
-                    for task in (last_payload or [])
-                )),
+                sum(1 for bundle in target_bundles if bundle.get("runId")),
+                tuple(
+                    sorted(
+                        (
+                            task.get("run_source_url", ""),
+                            str(task.get("status", "")).upper(),
+                        )
+                        for task in last_payload
+                    )
+                ),
             )
             if snapshot != prev_snapshot:
                 prev_snapshot = snapshot
                 deadline = datetime.now().timestamp() + timeout
 
-            if all(bundle.get("runId") for bundle in manifest["bundles"]):
+            if all(bundle.get("runId") for bundle in target_bundles):
                 resolve_deep_links(manifest)
                 write_json(manifest_path, manifest, True)
                 return completed_at
@@ -239,9 +331,7 @@ def persist_imported_runs(
 
             time_module.sleep(2)
 
-    missing = [
-        bundle["id"] for bundle in manifest["bundles"] if not bundle.get("runId")
-    ]
+    missing = [bundle["id"] for bundle in target_bundles if not bundle.get("runId")]
     # Persist whatever run ids landed before the stall so a re-run can resume and the
     # imported runs keep working deep-links.
     saved_note = ""
@@ -250,7 +340,7 @@ def persist_imported_runs(
         write_json(manifest_path, manifest, True)
         saved_note = "partial progress saved to manifest; "
     raise CliError(
-        f"timed out after {timeout}s with no import progress for job {job_id}; "
+        f"timed out after {timeout}s with no import progress; "
         f"{saved_note}missing bundles: {missing}; last payload: {last_payload!r}"
     )
 
@@ -482,32 +572,55 @@ def import_via_api(
     if old_base and old_base != base_url:
         retarget_manifest_urls(manifest, old_base, base_url)
 
+    include_ui = getattr(args, "include_ui", False)
+    api_bundles: list[dict[str, Any]] = []
+    ui_bundles: list[dict[str, Any]] = []
+    for bundle in manifest["bundles"]:
+        if not include_ui and bundle.get("importVia", "api") == "ui":
+            ui_bundles.append(bundle)
+        else:
+            api_bundles.append(bundle)
+
     cookie_dir = Path(tempfile.mkdtemp(prefix="bublik-e2e-api-"))
     cookie_jar = cookie_dir / "cookies.txt"
     try:
         login(base_url, settings, cookie_jar)
         if getattr(args, "setup_projects", False):
             ensure_api_projects(manifest, base_url, cookie_jar)
-        query = urllib.parse.urlencode({"url": manifest["importUrl"]})
+        reconcile_run_ids(manifest, base_url, cookie_jar)
         import_start = datetime.now().timestamp()
-        response = curl_json(
-            f"{base_url}/api/v2/importruns/source/?{query}",
-            cookie_jar=cookie_jar,
-        )
+        # One import job per bundle: this is what lets already-imported bundles
+        # be skipped on re-runs against a live instance, and keeps bundles marked
+        # importVia=ui out of the API import (they are the Playwright suite's).
+        jobs = {
+            bundle["id"]: schedule_import(base_url, bundle["importUrl"], cookie_jar)
+            for bundle in api_bundles
+            if not bundle.get("runId")
+        }
     finally:
         shutil.rmtree(cookie_dir, ignore_errors=True)
 
-    job_id = response.get("job_id")
-    if not isinstance(job_id, int):
-        raise CliError(f"import endpoint did not return a job_id: {response!r}")
-    completed_at = persist_imported_runs(
-        manifest_path, manifest, base_url, job_id, args.timeout
-    )
+    reused = sum(1 for bundle in api_bundles if bundle.get("runId"))
+    if jobs:
+        completed_at = persist_imported_runs(
+            manifest_path, manifest, base_url, jobs, args.timeout
+        )
+    else:
+        completed_at = {}
+        resolve_deep_links(manifest)
+        write_json(manifest_path, manifest, True)
+
     elapsed = datetime.now().timestamp() - import_start
-    console.print(
-        f"[green]✓[/] Imported {len(manifest['bundles'])} fixture runs via API job "
-        f"{job_id} in {format_duration(elapsed)}"
-    )
+    parts = [f"imported {len(jobs)} fixture runs via API in {format_duration(elapsed)}"]
+    if reused:
+        parts.append(f"reused {reused} already imported")
+    if ui_bundles:
+        pending_ui = sum(1 for bundle in ui_bundles if not bundle.get("runId"))
+        parts.append(
+            f"left {pending_ui} of {len(ui_bundles)} UI-import bundles "
+            "for the Playwright suite (importVia=ui)"
+        )
+    console.print(f"[green]✓[/] {'; '.join(parts)}")
     timing = build_timing_summary(manifest["bundles"], completed_at, import_start)
     if timing is not None:
         console.print(timing)

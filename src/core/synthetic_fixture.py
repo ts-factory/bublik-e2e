@@ -140,7 +140,10 @@ def _meta_for_node(node: dict[str, Any]) -> dict[str, Any]:
     if node.get("objective"):
         payload["objective"] = node["objective"]
     if node.get("params"):
-        payload["params"] = node["params"]
+        payload["parameters"] = [
+            {"name": name, "value": str(value)}
+            for name, value in node["params"].items()
+        ]
     verdicts = node["obtained"]["result"].get("verdicts")
     if verdicts:
         level = _status_level(_node_status(node))
@@ -148,9 +151,10 @@ def _meta_for_node(node: dict[str, Any]) -> dict[str, Any]:
             {"verdict": verdict, "level": level} for verdict in verdicts
         ]
     if node.get("artifacts"):
-        payload["artifacts"] = node["artifacts"]
-    if node.get("err"):
-        payload["err"] = node["err"]
+        level = _status_level(_node_status(node))
+        payload["artifacts"] = [
+            {"artifact": artifact, "level": level} for artifact in node["artifacts"]
+        ]
     return payload
 
 
@@ -198,11 +202,19 @@ def _table_rows_for_node(node: dict[str, Any]) -> list[dict[str, Any]]:
     status = _node_status(node)
     rows = [
         text_row(
-            "INFO", main, "TAPI Jumps", node["start_ts"], node["start_ts_utc"],
+            "INFO",
+            main,
+            "TAPI Jumps",
+            node["start_ts"],
+            node["start_ts_utc"],
             "Main test entity",
         ),
         text_row(
-            _status_level(status), main, "Step", node["start_ts"], node["start_ts_utc"],
+            _status_level(status),
+            main,
+            "Step",
+            node["start_ts"],
+            node["start_ts_utc"],
             f"{node['name']} start"
             + (f"\n{node['objective']}" if node.get("objective") else ""),
         ),
@@ -223,7 +235,11 @@ def _table_rows_for_node(node: dict[str, Any]) -> list[dict[str, Any]]:
         )
     rows.append(
         text_row(
-            _status_level(status), "Tester", "Run", node["end_ts"], node["end_ts_utc"],
+            _status_level(status),
+            "Tester",
+            "Run",
+            node["end_ts"],
+            node["end_ts_utc"],
             f"Obtained result is:\n{status}",
         )
     )
@@ -365,7 +381,9 @@ class SyntheticFixture(BaseFixture):
                 "start_ts_utc": start_utc,
                 "name": family.name,
                 "type": "test",
-                "hash": hashlib.md5(identity.encode(), usedforsecurity=False).hexdigest(),
+                "hash": hashlib.md5(
+                    identity.encode(), usedforsecurity=False
+                ).hexdigest(),
                 "test_id": test_id,
                 "plan_id": test_id,
                 "tin": tin,
@@ -409,10 +427,7 @@ class SyntheticFixture(BaseFixture):
                     "start_ts_utc": start_utc,
                     "name": package.name,
                     "type": "pkg",
-                    "hash": hashlib.md5(
-                        f"{self.name}/{package.name}".encode(),
-                        usedforsecurity=False,
-                    ).hexdigest(),
+                    "hash": "",
                     "test_id": package_id,
                     "plan_id": package_id,
                     "tin": -1,
@@ -435,7 +450,7 @@ class SyntheticFixture(BaseFixture):
             "start_ts_utc": child_nodes[0]["start_ts_utc"],
             "name": self.name,
             "type": "pkg",
-            "hash": hashlib.md5(self.name.encode(), usedforsecurity=False).hexdigest(),
+            "hash": "",
             "test_id": 1,
             "plan_id": 0,
             "tin": -1,
@@ -463,7 +478,9 @@ class SyntheticFixture(BaseFixture):
                 },
                 {
                     "name": f"{self.revision_meta}_REV",
-                    "value": hashlib.sha1(self.name.encode(), usedforsecurity=False).hexdigest(),
+                    "value": hashlib.sha1(
+                        self.name.encode(), usedforsecurity=False
+                    ).hexdigest(),
                     "type": "revision",
                 },
                 {"name": "CFG", "value": "synthetic-e2e"},

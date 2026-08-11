@@ -5,6 +5,18 @@
       "description": "One generated+published fixture run and everything derived from it.",
       "properties": {
         "conclusionSpec": {
+          "enum": [
+            "ok",
+            "nok-warning",
+            "nok-error",
+            "warning",
+            "error",
+            "running",
+            "busy",
+            "stopped",
+            "interrupted",
+            "compromised"
+          ],
           "type": "string"
         },
         "date": {
@@ -27,8 +39,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "fixture": {
           "type": "string"
@@ -37,6 +48,14 @@
           "type": "string"
         },
         "importUrl": {
+          "type": "string"
+        },
+        "importVia": {
+          "default": "api",
+          "enum": [
+            "api",
+            "ui"
+          ],
           "type": "string"
         },
         "logUrl": {
@@ -60,7 +79,6 @@
           "type": "string"
         },
         "revisions": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/Revision"
           },
@@ -80,13 +98,21 @@
         "runStatus": {
           "anyOf": [
             {
+              "enum": [
+                "DONE",
+                "WARNING",
+                "ERROR",
+                "RUNNING",
+                "BUSY",
+                "STOPPED",
+                "INTERRUPTED"
+              ],
               "type": "string"
             },
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "runUrl": {
           "anyOf": [
@@ -110,12 +136,10 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "tags": {
           "additionalProperties": true,
-          "default": {},
           "type": "object"
         }
       },
@@ -128,9 +152,83 @@
         "importUrl",
         "project",
         "e2eRunId",
+        "runStatus",
+        "startTimestamp",
+        "finishTimestamp",
+        "tags",
+        "revisions",
         "runUrlTemplate",
         "logUrlTemplate",
         "expectedRuns"
+      ],
+      "type": "object"
+    },
+    "ExpectedMatrix": {
+      "additionalProperties": false,
+      "description": "Expected result counts per (expectation, result-type) cell.\n\nKeys mirror ``core.constants.MATRIX_KEYS``; the generator always emits every\ncell, so all fields are required.",
+      "properties": {
+        "abnormal": {
+          "type": "integer"
+        },
+        "expectedCored": {
+          "type": "integer"
+        },
+        "expectedFailed": {
+          "type": "integer"
+        },
+        "expectedFaked": {
+          "type": "integer"
+        },
+        "expectedIncomplete": {
+          "type": "integer"
+        },
+        "expectedKilled": {
+          "type": "integer"
+        },
+        "expectedPassed": {
+          "type": "integer"
+        },
+        "expectedSkipped": {
+          "type": "integer"
+        },
+        "unexpectedCored": {
+          "type": "integer"
+        },
+        "unexpectedFailed": {
+          "type": "integer"
+        },
+        "unexpectedFaked": {
+          "type": "integer"
+        },
+        "unexpectedIncomplete": {
+          "type": "integer"
+        },
+        "unexpectedKilled": {
+          "type": "integer"
+        },
+        "unexpectedPassed": {
+          "type": "integer"
+        },
+        "unexpectedSkipped": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "expectedPassed",
+        "unexpectedPassed",
+        "expectedFailed",
+        "unexpectedFailed",
+        "expectedSkipped",
+        "unexpectedSkipped",
+        "expectedKilled",
+        "unexpectedKilled",
+        "expectedCored",
+        "unexpectedCored",
+        "expectedFaked",
+        "unexpectedFaked",
+        "expectedIncomplete",
+        "unexpectedIncomplete",
+        "abnormal"
       ],
       "type": "object"
     },
@@ -142,6 +240,16 @@
           "type": "string"
         },
         "expectedConclusion": {
+          "enum": [
+            "run-ok",
+            "run-warning",
+            "run-error",
+            "run-running",
+            "run-busy",
+            "run-stopped",
+            "run-interrupted",
+            "run-compromised"
+          ],
           "type": "string"
         },
         "expectedConclusionReason": {
@@ -152,19 +260,29 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "expectedMatrix": {
-          "additionalProperties": {
-            "type": "integer"
-          },
-          "type": "object"
+          "$ref": "#/$defs/ExpectedMatrix"
         },
         "expectedStatus": {
+          "enum": [
+            "DONE",
+            "WARNING",
+            "ERROR",
+            "RUNNING",
+            "BUSY",
+            "STOPPED",
+            "INTERRUPTED"
+          ],
           "type": "string"
         },
         "expectedStatusByNok": {
+          "enum": [
+            "success",
+            "warning",
+            "error"
+          ],
           "type": "string"
         },
         "iterationCount": {
@@ -182,7 +300,6 @@
           "default": null
         },
         "measurements": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/MeasurementSummary"
           },
@@ -192,14 +309,12 @@
           "type": "string"
         },
         "packages": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/PackageSummary"
           },
           "type": "array"
         },
         "requirements": {
-          "default": [],
           "items": {
             "type": "string"
           },
@@ -223,16 +338,13 @@
             },
             "type": "array"
           },
-          "default": {},
           "type": "object"
         },
         "tags": {
           "additionalProperties": true,
-          "default": {},
           "type": "object"
         },
         "verdicts": {
-          "default": [],
           "items": {
             "type": "string"
           },
@@ -246,7 +358,14 @@
         "expectedStatus",
         "expectedStatusByNok",
         "expectedConclusion",
-        "expectedMatrix"
+        "expectedConclusionReason",
+        "expectedMatrix",
+        "tags",
+        "requirements",
+        "verdicts",
+        "measurements",
+        "packages",
+        "sampleTests"
       ],
       "type": "object"
     },
@@ -255,15 +374,23 @@
       "description": "A sampled leaf iteration shown in the UI (see ``sampleTests``).\n\n``params``/``verdicts``/``artifacts``/``measurements`` carry the raw,\nprovider-shaped payloads and are intentionally left loose.",
       "properties": {
         "artifacts": {
-          "default": [],
           "items": {},
           "type": "array"
         },
         "expectedStatus": {
+          "enum": [
+            "PASSED",
+            "FAILED",
+            "SKIPPED",
+            "KILLED",
+            "CORED",
+            "FAKED",
+            "INCOMPLETE",
+            "EMPTY"
+          ],
           "type": "string"
         },
         "measurements": {
-          "default": [],
           "items": {},
           "type": "array"
         },
@@ -275,33 +402,38 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "params": {
           "additionalProperties": true,
-          "default": {},
           "type": "object"
         },
         "path": {
-          "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "pathStr": {
-          "default": "",
           "type": "string"
         },
         "reqs": {
-          "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "status": {
+          "enum": [
+            "PASSED",
+            "FAILED",
+            "SKIPPED",
+            "KILLED",
+            "CORED",
+            "FAKED",
+            "INCOMPLETE",
+            "EMPTY"
+          ],
           "type": "string"
         },
         "tin": {
@@ -312,28 +444,35 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "unexpected": {
           "type": "boolean"
         },
         "verdicts": {
-          "default": [],
           "items": {},
           "type": "array"
         }
       },
       "required": [
+        "name",
+        "tin",
+        "path",
+        "pathStr",
+        "params",
+        "reqs",
         "status",
         "expectedStatus",
-        "unexpected"
+        "unexpected",
+        "verdicts",
+        "artifacts",
+        "measurements"
       ],
       "type": "object"
     },
     "MeasurementSummary": {
       "additionalProperties": false,
-      "description": "One flattened measurement entry across all leaf iterations.",
+      "description": "One flattened measurement entry across all leaf iterations.\n\nThe generator always emits every key (values may be null), so all fields are\nrequired; that keeps the schema honest and the generated TS types free of\nspurious optionality.",
       "properties": {
         "metric": {
           "anyOf": [
@@ -343,8 +482,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "testPath": {
           "anyOf": [
@@ -354,8 +492,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "tool": {
           "anyOf": [
@@ -365,8 +502,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "units": {
           "anyOf": [
@@ -376,8 +512,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "value": {
           "anyOf": [
@@ -390,10 +525,16 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         }
       },
+      "required": [
+        "testPath",
+        "tool",
+        "metric",
+        "value",
+        "units"
+      ],
       "type": "object"
     },
     "PackageSummary": {
@@ -414,14 +555,14 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "total": {
           "type": "integer"
         }
       },
       "required": [
+        "name",
         "total",
         "byStatus"
       ],
@@ -436,7 +577,6 @@
           "type": "object"
         },
         "description": {
-          "default": "",
           "type": "string"
         },
         "name": {
@@ -454,6 +594,7 @@
         "project",
         "type",
         "name",
+        "description",
         "content"
       ],
       "type": "object"
@@ -512,14 +653,12 @@
       "type": "string"
     },
     "bundles": {
-      "default": [],
       "items": {
         "$ref": "#/$defs/Bundle"
       },
       "type": "array"
     },
     "configs": {
-      "default": [],
       "items": {
         "$ref": "#/$defs/ReportConfig"
       },
@@ -529,7 +668,6 @@
       "type": "string"
     },
     "emptyDates": {
-      "default": [],
       "items": {
         "type": "string"
       },
@@ -559,7 +697,10 @@
     "uiBaseUrl",
     "dashboardUrl",
     "historyUrl",
-    "importUrl"
+    "importUrl",
+    "emptyDates",
+    "configs",
+    "bundles"
   ],
   "type": "object"
 }

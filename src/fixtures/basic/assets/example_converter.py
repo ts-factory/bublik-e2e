@@ -93,6 +93,7 @@ class Node:
     plan_id: int = 0
     path: List[str] = field(default_factory=list)
     path_str: str = ""
+
     def add_child(self, child: "Node") -> None:
         child.parent = self
         self.children.append(child)
@@ -139,7 +140,11 @@ def datetime_to_bublik_ts(dt: datetime) -> str:
 
 
 def bublik_ts_to_iso(ts: str) -> str:
-    return bublik_ts_to_datetime(ts).replace(tzinfo=local_timezone()).isoformat(timespec="milliseconds")
+    return (
+        bublik_ts_to_datetime(ts)
+        .replace(tzinfo=local_timezone())
+        .isoformat(timespec="milliseconds")
+    )
 
 
 def time_part(ts: str) -> str:
@@ -167,7 +172,9 @@ def status_level(status: str) -> str:
 
 
 def stable_hash(name: str, params: Dict[str, str]) -> str:
-    payload = json.dumps({"name": name, "params": params}, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        {"name": name, "params": params}, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
 
@@ -297,7 +304,9 @@ def apply_result(node: Node, message: LogMessage, fields: Dict[str, str]) -> Non
     row_fields = dict(fields)
     if err != "":
         row_fields["err"] = err
-    add_text_event(node, message, "Self", format_result_content(row_fields), use_main_entity=True)
+    add_text_event(
+        node, message, "Self", format_result_content(row_fields), use_main_entity=True
+    )
 
 
 def build_measurement(fields: Dict[str, str], node_name: str) -> dict:
@@ -305,7 +314,9 @@ def build_measurement(fields: Dict[str, str], node_name: str) -> dict:
     try:
         value = float(fields["value"])
     except ValueError as exc:
-        raise ValueError(f"MEASUREMENT value must be numeric: {fields['value']}") from exc
+        raise ValueError(
+            f"MEASUREMENT value must be numeric: {fields['value']}"
+        ) from exc
 
     name = fields["name"]
     tool = fields.get("tool", "raw-log-example")
@@ -331,7 +342,7 @@ def build_measurement(fields: Dict[str, str], node_name: str) -> dict:
                         "aggr": aggr,
                         "value": value,
                         "base_units": units,
-                        "multiplier": 1,
+                        "multiplier": "1",
                     }
                 ],
             }
@@ -378,7 +389,7 @@ def build_graph_measurement(graph: dict, node_name: str) -> dict:
 
     def entries(values: List[float], units: str) -> List[dict]:
         return [
-            {"aggr": "single", "value": value, "base_units": units, "multiplier": 1}
+            {"aggr": "single", "value": value, "base_units": units, "multiplier": "1"}
             for value in values
         ]
 
@@ -418,7 +429,9 @@ def close_node(node: Node, message: LogMessage, status: str) -> None:
     node.end_ts = message.bublik_ts
     normalized = ensure_status(status)
     if node.explicit_status is not None and node.explicit_status != normalized:
-        raise ValueError(f"Status mismatch for {node.name}: {node.explicit_status} != {normalized}")
+        raise ValueError(
+            f"Status mismatch for {node.name}: {node.explicit_status} != {normalized}"
+        )
     node.explicit_status = normalized
 
 
@@ -437,7 +450,9 @@ def current_text_target(
     return root
 
 
-def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[str, str]]:
+def parse_raw_log(
+    messages: List[LogMessage],
+) -> Tuple[Node, List[dict], Dict[str, str]]:
     if not messages:
         raise ValueError("Raw log is empty")
 
@@ -453,7 +468,9 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
     for message in messages:
         parsed = parse_mi_record(message.message)
         if parsed is None:
-            target = current_text_target(root, package_stack, current_test, current_iteration)
+            target = current_text_target(
+                root, package_stack, current_test, current_iteration
+            )
             if target is not None:
                 add_text_event(
                     target,
@@ -538,10 +555,14 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
             if current_test or current_iteration:
                 raise ValueError("TEST_START requires no open test/iteration")
             if package_stack:
-                current_test = Node(name=fields["name"], type="pkg", start_ts=message.bublik_ts)
+                current_test = Node(
+                    name=fields["name"], type="pkg", start_ts=message.bublik_ts
+                )
                 package_stack[-1].add_child(current_test)
             else:
-                current_test = Node(name=fields["name"], type="test", start_ts=message.bublik_ts, tin=-1)
+                current_test = Node(
+                    name=fields["name"], type="test", start_ts=message.bublik_ts, tin=-1
+                )
                 root.add_child(current_test)
             continue
 
@@ -561,7 +582,11 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
 
         if event == "TEST_END":
             require_fields(event, fields, ["name", "status"])
-            if current_test is None or current_iteration is not None or current_test.name != fields["name"]:
+            if (
+                current_test is None
+                or current_iteration is not None
+                or current_test.name != fields["name"]
+            ):
                 raise ValueError("TEST_END does not match the open test")
             close_node(current_test, message, fields["status"])
             current_test = None
@@ -570,7 +595,9 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
         if event == "ITERATION_START":
             require_fields(event, fields, ["name", "tin"])
             if current_test is None or current_iteration is not None:
-                raise ValueError("ITERATION_START requires an open test and no open iteration")
+                raise ValueError(
+                    "ITERATION_START requires an open test and no open iteration"
+                )
             current_iteration = Node(
                 name=fields["name"],
                 type="test",
@@ -604,7 +631,9 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
                 "STEP_PUSH": "StepPush",
                 "STEP_POP": "StepPop",
             }[event]
-            add_text_event(target, message, user_name, fields["text"], use_main_entity=True)
+            add_text_event(
+                target, message, user_name, fields["text"], use_main_entity=True
+            )
             continue
 
         if event == "RESULT":
@@ -644,7 +673,9 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
             target = current_iteration or current_test
             if target is None or (target.type == "pkg" and current_iteration is None):
                 raise ValueError("MEASUREMENT requires an open iteration or leaf test")
-            add_measurement_event(target, message, build_measurement(fields, target.name))
+            add_measurement_event(
+                target, message, build_measurement(fields, target.name)
+            )
             continue
 
         if event == "GRAPH_START":
@@ -662,7 +693,9 @@ def parse_raw_log(messages: List[LogMessage]) -> Tuple[Node, List[dict], Dict[st
                 "x_type": fields["x_type"],
                 "x_name": fields.get("x_name"),
                 "x_units": fields.get("x_units", ""),
-                "x_values": parse_value_list(fields["x_values"], "GRAPH_START x_values"),
+                "x_values": parse_value_list(
+                    fields["x_values"], "GRAPH_START x_values"
+                ),
                 "series": [],
                 "message": message,
                 "target": target,
@@ -831,7 +864,9 @@ def bublik_node(node: Node) -> dict:
     return payload
 
 
-def ensure_meta(metas: List[dict], name: str, value: str, meta_type: Optional[str] = None) -> None:
+def ensure_meta(
+    metas: List[dict], name: str, value: str, meta_type: Optional[str] = None
+) -> None:
     item = {"name": name, "value": value}
     if meta_type is not None:
         item["type"] = meta_type
@@ -893,13 +928,19 @@ def meta_for_node(node: Node) -> dict:
     if node.objective:
         payload["objective"] = node.objective
     if node.params:
-        payload["params"] = node.params
+        payload["parameters"] = [
+            {"name": name, "value": str(value)} for name, value in node.params.items()
+        ]
     if node.verdicts:
-        payload["verdicts"] = [{"verdict": verdict, "level": status_level(node.status())} for verdict in node.verdicts]
+        payload["verdicts"] = [
+            {"verdict": verdict, "level": status_level(node.status())}
+            for verdict in node.verdicts
+        ]
     if node.artifacts:
-        payload["artifacts"] = node.artifacts
-    if node.err:
-        payload["err"] = node.err
+        payload["artifacts"] = [
+            {"artifact": artifact, "level": status_level(node.status())}
+            for artifact in node.artifacts
+        ]
     return payload
 
 
@@ -912,7 +953,9 @@ def table_rows_for_node(node: Node) -> List[dict]:
         next_line_number += 1
         return value
 
-    def make_text_row(level: str, entity_name: str, user_name: str, ts: str, content: str) -> dict:
+    def make_text_row(
+        level: str, entity_name: str, user_name: str, ts: str, content: str
+    ) -> dict:
         return {
             "line_number": next_line(),
             "level": level,
@@ -929,7 +972,11 @@ def table_rows_for_node(node: Node) -> List[dict]:
             level = "INFO"
         if level == "INFO":
             level = "RING"
-        content = mi_content(event.content) if event.content_type == "mi" else text_content(str(event.content))
+        content = (
+            mi_content(event.content)
+            if event.content_type == "mi"
+            else text_content(str(event.content))
+        )
         return {
             "line_number": next_line(),
             "level": level,
@@ -945,7 +992,9 @@ def table_rows_for_node(node: Node) -> List[dict]:
     if node.children:
         rows = []
         for child in node.children:
-            description = f"{child.name} {'test' if child.type == 'test' else 'package'} start"
+            description = (
+                f"{child.name} {'test' if child.type == 'test' else 'package'} start"
+            )
             if child.objective:
                 description = f"{description}\n{child.objective}"
             rows.append(
@@ -961,7 +1010,9 @@ def table_rows_for_node(node: Node) -> List[dict]:
 
     main_entity_name = table_entity_name(node)
     rows = [
-        make_text_row("INFO", main_entity_name, "TAPI Jumps", node.start_ts, "Main test entity"),
+        make_text_row(
+            "INFO", main_entity_name, "TAPI Jumps", node.start_ts, "Main test entity"
+        ),
         make_text_row(
             status_level(node.status()),
             main_entity_name,
@@ -1050,7 +1101,9 @@ def write_bundle(
         },
         pretty,
     )
-    write_json(output_dir / "meta_data.json", meta_data(root, run_metas, project), pretty)
+    write_json(
+        output_dir / "meta_data.json", meta_data(root, run_metas, project), pretty
+    )
 
     json_dir = output_dir / "json"
     json_dir.mkdir(exist_ok=True)
@@ -1067,7 +1120,9 @@ def write_bundle(
         return file_name
 
     write_node(root, is_root=True)
-    write_json(json_dir / "tree.json", {"main_package": "node_1_0.json", "tree": tree}, pretty)
+    write_json(
+        json_dir / "tree.json", {"main_package": "node_1_0.json", "tree": tree}, pretty
+    )
 
 
 def main() -> None:
@@ -1075,16 +1130,32 @@ def main() -> None:
         description="Create a Bublik import bundle from the MI v2 raw-log example format."
     )
     parser.add_argument("raw_log", type=Path, help="Path to the raw log file")
-    parser.add_argument("-o", "--output-dir", type=Path, required=True, help="Bundle output directory")
-    parser.add_argument("--project", default=None, help="Fallback PROJECT meta value if the raw log does not provide one")
-    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+    parser.add_argument(
+        "-o", "--output-dir", type=Path, required=True, help="Bundle output directory"
+    )
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="Fallback PROJECT meta value if the raw log does not provide one",
+    )
+    parser.add_argument(
+        "--pretty", action="store_true", help="Pretty-print JSON output"
+    )
     args = parser.parse_args()
 
     messages = parse_messages(args.raw_log)
     root, run_metas, run_tags = parse_raw_log(messages)
     finalize_tree(root)
     enforce_monotonic(root)
-    write_bundle(root, run_metas, run_tags, args.raw_log, args.output_dir, args.project, args.pretty)
+    write_bundle(
+        root,
+        run_metas,
+        run_tags,
+        args.raw_log,
+        args.output_dir,
+        args.project,
+        args.pretty,
+    )
     print(args.output_dir)
 
 

@@ -32,6 +32,7 @@ class PlannedRun:
     run_date: str
     ordinal: int
     day_index: int
+    import_via: str = "api"
 
 
 def parse_date(value: str) -> datetime:
@@ -128,19 +129,24 @@ def validate_conclusion(conclusion: str) -> None:
 
 def parse_day_entry(
     entry: str,
-) -> tuple[str, list[tuple[str | None, str, str | None, list[MixValue] | None, int]]]:
-    """Parse ``YYYY-MM-DD:[fixture.]conclusion[@mixref]=count,...``.
+) -> tuple[
+    str, list[tuple[str | None, str, str | None, list[MixValue] | None, int, str]]
+]:
+    """Parse ``YYYY-MM-DD:[fixture.]conclusion[@mixref][+ui]=count,...``.
 
     ``mixref`` is either a named ``--mix`` reference or an inline definition
     ``key=val;key=val``; inline definitions are returned as parsed ``MixValue``
     lists. The count is split off the right (``rsplit``) so inline ``=`` signs
-    in the mix do not confuse it.
+    in the mix do not confuse it. A trailing ``+ui`` marks the runs for import
+    through the UI (the Playwright suite) instead of the CLI's API import.
     """
     if ":" not in entry:
         raise CliError("--day must be YYYY-MM-DD:spec")
     date_raw, spec_raw = entry.split(":", 1)
     run_date = parse_date(date_raw.strip()).date().isoformat()
-    specs: list[tuple[str | None, str, str | None, list[MixValue] | None, int]] = []
+    specs: list[
+        tuple[str | None, str, str | None, list[MixValue] | None, int, str]
+    ] = []
     for item in spec_raw.split(","):
         item = item.strip()
         if not item:
@@ -154,6 +160,10 @@ def parse_day_entry(
             raise CliError(f"invalid run count {count_raw!r}") from exc
         if count < 0:
             raise CliError(f"run count cannot be negative: {item!r}")
+        import_via = "api"
+        if lhs.endswith("+ui"):
+            import_via = "ui"
+            lhs = lhs[: -len("+ui")].strip()
         mix_name: str | None = None
         mix_values: list[MixValue] | None = None
         if "@" in lhs:
@@ -169,7 +179,9 @@ def parse_day_entry(
         if "." in lhs:
             fixture_name, conclusion = [part.strip() for part in lhs.split(".", 1)]
         validate_conclusion(conclusion)
-        specs.append((fixture_name, conclusion, mix_name, mix_values, count))
+        specs.append(
+            (fixture_name, conclusion, mix_name, mix_values, count, import_via)
+        )
     return run_date, specs
 
 
@@ -198,7 +210,7 @@ def plan_from_days(
         if not specs:
             empty_dates.append(run_date)
             continue
-        for fixture_name, conclusion, mix_name, mix_values, count in specs:
+        for fixture_name, conclusion, mix_name, mix_values, count, import_via in specs:
             if mix_values is not None:
                 # Register the inline mix under a synthetic name so the manifest
                 # resolves it through the same mixes[...] lookup as named mixes.
@@ -222,6 +234,7 @@ def plan_from_days(
                             run_date=run_date,
                             ordinal=ordinal,
                             day_index=day_index,
+                            import_via=import_via,
                         )
                     )
         day_index += 1

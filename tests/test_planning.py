@@ -84,8 +84,21 @@ def test_parse_day_entry_supports_fixture_mix_and_count() -> None:
 
     assert run_date == "2026-04-21"
     assert specs == [
-        ("basic", "nok-warning", "warning-mix", None, 2),
-        (None, "error", None, None, 1),
+        ("basic", "nok-warning", "warning-mix", None, 2, "api"),
+        (None, "error", None, None, 1, "api"),
+    ]
+
+
+def test_parse_day_entry_supports_ui_import_marker() -> None:
+    run_date, specs = parse_day_entry(
+        "2026-04-21:basic.ok+ui=1,basic.nok-warning@warning-mix+ui=2,error=1"
+    )
+
+    assert run_date == "2026-04-21"
+    assert specs == [
+        ("basic", "ok", None, None, 1, "ui"),
+        ("basic", "nok-warning", "warning-mix", None, 2, "ui"),
+        (None, "error", None, None, 1, "api"),
     ]
 
 
@@ -96,16 +109,30 @@ def test_parse_day_entry_parses_inline_mix() -> None:
 
     assert run_date == "2026-04-21"
     assert len(specs) == 1
-    fixture_name, conclusion, mix_name, mix_values, count = specs[0]
+    fixture_name, conclusion, mix_name, mix_values, count, import_via = specs[0]
     assert (fixture_name, conclusion, mix_name, count) == (
         "net-drv-ts",
         "nok-warning",
         None,
         2,
     )
+    assert import_via == "api"
     assert [v.key for v in mix_values] == ["unexpectedFailed", "unexpectedSkipped"]
     assert mix_values[0].value == 20
     assert mix_values[0].is_percent is True
+
+
+def test_parse_day_entry_parses_inline_mix_with_ui_marker() -> None:
+    _, specs = parse_day_entry("2026-04-21:basic.nok-warning@unexpectedFailed=20%+ui=2")
+
+    fixture_name, conclusion, mix_name, mix_values, count, import_via = specs[0]
+    assert (fixture_name, conclusion, count, import_via) == (
+        "basic",
+        "nok-warning",
+        2,
+        "ui",
+    )
+    assert [v.key for v in mix_values] == ["unexpectedFailed"]
 
 
 def test_parse_day_entry_rejects_unknown_conclusion() -> None:
