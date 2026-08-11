@@ -29,7 +29,12 @@ from core.constants import (
 from core.discovery import selected_fixtures
 from core.manifest_models import Manifest
 from core.planning import build_mixes, build_plan
-from core.run_log_schema import load_run_log_validator, validate_run_log
+from core.run_log_schema import (
+    load_meta_data_validator,
+    load_run_log_validator,
+    validate_meta_data,
+    validate_run_log,
+)
 from core.settings import Settings, resolve_manifest
 from core.summary import render_run_summary
 
@@ -251,13 +256,20 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
             "no publish directory: pass --publish-dir <path> "
             "(or set BUBLIK_E2E_PUBLISH_DIR)"
         )
-    schema_path = settings.run_log_schema
-    if schema_path is None:
+    run_log_schema_path = settings.run_log_schema
+    if run_log_schema_path is None:
         raise CliError(
             "no run-log schema: pass --run-log-schema <path> "
             "(or set BUBLIK_E2E_RUN_LOG_SCHEMA)"
         )
-    validator = load_run_log_validator(schema_path)
+    meta_data_schema_path = settings.meta_data_schema
+    if meta_data_schema_path is None:
+        raise CliError(
+            "no meta-data schema: pass --meta-data-schema <path> "
+            "(or set BUBLIK_E2E_META_DATA_SCHEMA)"
+        )
+    run_log_validator = load_run_log_validator(run_log_schema_path)
+    meta_data_validator = load_meta_data_validator(meta_data_schema_path)
     manifest_path = resolve_manifest(args)
     seg = publish_dir.name
     logs_base = settings.logs_base_url.rstrip("/")
@@ -279,7 +291,16 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
         bundle_output_dir = publish_dir / spec.id
         generate_bundle(plan.fixture, spec, bundle_output_dir, args.pretty)
         apply_mix(bundle_output_dir, mixes[plan.mix_name], spec.conclusion, args.pretty)
-        validate_run_log(bundle_output_dir / "bublik.json", schema_path, validator)
+        validate_run_log(
+            bundle_output_dir / "bublik.json",
+            run_log_schema_path,
+            run_log_validator,
+        )
+        validate_meta_data(
+            bundle_output_dir / "meta_data.json",
+            meta_data_schema_path,
+            meta_data_validator,
+        )
 
         quoted = "/".join(urllib.parse.quote(part) for part in (seg, spec.id) if part)
         import_url = f"{logs_base}/{quoted}"

@@ -130,6 +130,14 @@ RunLogSchemaOpt = Annotated[
         "Required unless BUBLIK_E2E_RUN_LOG_SCHEMA is set."
     ),
 ]
+MetaDataSchemaOpt = Annotated[
+    Optional[Path],
+    typer.Option(
+        "--meta-data-schema",
+        help="Draft 7 JSON Schema used to validate each finalized meta_data.json. "
+        "Required unless BUBLIK_E2E_META_DATA_SCHEMA is set.",
+    ),
+]
 
 # Auth
 EmailOpt = Annotated[
@@ -169,7 +177,7 @@ IncludeUiOpt = Annotated[
 
 GENERATE_EPILOG = """[bold]Examples[/]
 
-[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA points to a Draft 7 run-log schema.[/]
+[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA and BUBLIK_E2E_META_DATA_SCHEMA point to the corresponding Draft 7 schemas.[/]
 
 [dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
@@ -205,7 +213,7 @@ IMPORT_EPILOG = """[bold]Examples[/]
 
 RUN_EPILOG = """[bold]Examples[/]
 
-[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA points to a Draft 7 run-log schema.[/]
+[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA and BUBLIK_E2E_META_DATA_SCHEMA point to the corresponding Draft 7 schemas.[/]
 
 [dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
@@ -245,6 +253,7 @@ def generate(
     publish_dir: PublishDirOpt = None,
     pretty: PrettyOpt = False,
     run_log_schema: RunLogSchemaOpt = None,
+    meta_data_schema: MetaDataSchemaOpt = None,
     url: UrlOpt = None,
     env_file: EnvFileOpt = None,
     manifest: ManifestOpt = None,
@@ -264,6 +273,7 @@ def generate(
         publish_dir=publish_dir,
         pretty=pretty,
         run_log_schema=run_log_schema,
+        meta_data_schema=meta_data_schema,
     )
 
 
@@ -303,6 +313,7 @@ def run(
     publish_dir: PublishDirOpt = None,
     pretty: PrettyOpt = False,
     run_log_schema: RunLogSchemaOpt = None,
+    meta_data_schema: MetaDataSchemaOpt = None,
     url: UrlOpt = None,
     env_file: EnvFileOpt = None,
     manifest: ManifestOpt = None,
@@ -327,6 +338,7 @@ def run(
         publish_dir=publish_dir,
         pretty=pretty,
         run_log_schema=run_log_schema,
+        meta_data_schema=meta_data_schema,
         email=email,
         password=password,
         setup_projects=setup_projects,

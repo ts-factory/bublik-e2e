@@ -15,15 +15,11 @@ runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 ONE_DAY = timedelta(days=1).total_seconds()
 REPO_ROOT = Path(__file__).resolve().parents[1]
-AUTHORITATIVE_SCHEMA = (
-    REPO_ROOT.parent
-    / "bublik-docker"
-    / "bublik"
-    / "bublik"
-    / "data"
-    / "schemas"
-    / "run_log.json"
+AUTHORITATIVE_SCHEMA_DIR = (
+    REPO_ROOT.parent / "bublik-docker" / "bublik" / "bublik" / "data" / "schemas"
 )
+AUTHORITATIVE_RUN_LOG_SCHEMA = AUTHORITATIVE_SCHEMA_DIR / "run_log.json"
+AUTHORITATIVE_META_DATA_SCHEMA = AUTHORITATIVE_SCHEMA_DIR / "meta_data.json"
 
 
 def visible_output(output: str) -> str:
@@ -61,16 +57,19 @@ def test_generate_help_succeeds() -> None:
     assert "--publish-dir" in output
     assert "--day" in output
     assert "--run-log-schema" in output
+    assert "--meta-data-schema" in output
 
 
-def test_run_log_schema_option_is_not_available_on_import() -> None:
+def test_generation_schema_options_are_not_available_on_import() -> None:
     run_result = runner.invoke(app, ["run", "--help"])
     import_result = runner.invoke(app, ["import", "--help"])
 
     assert run_result.exit_code == 0
     assert "--run-log-schema" in visible_output(run_result.output)
+    assert "--meta-data-sche" in visible_output(run_result.output)
     assert import_result.exit_code == 0
     assert "--run-log-schema" not in visible_output(import_result.output)
+    assert "--meta-data-schema" not in visible_output(import_result.output)
 
 
 def test_generate_validation_failure_exits_non_zero(tmp_path) -> None:
@@ -86,6 +85,8 @@ def test_generate_validation_failure_exits_non_zero(tmp_path) -> None:
             "--publish-dir",
             str(tmp_path / "publish"),
             "--run-log-schema",
+            str(schema_path),
+            "--meta-data-schema",
             str(schema_path),
         ],
     )
@@ -111,8 +112,11 @@ def test_generate_requires_run_log_schema_before_deleting_output(
     assert marker.read_text() == "keep"
 
 
-def test_generate_rejects_missing_schema_file_before_deleting_output(tmp_path) -> None:
-    schema_path = tmp_path / "missing-schema.json"
+def test_generate_requires_meta_data_schema_before_deleting_output(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.delenv("BUBLIK_E2E_META_DATA_SCHEMA", raising=False)
+    schema_path = write_permissive_schema(tmp_path)
     publish_dir = tmp_path / "publish"
     publish_dir.mkdir()
     marker = publish_dir / "keep.txt"
@@ -129,9 +133,66 @@ def test_generate_rejects_missing_schema_file_before_deleting_output(tmp_path) -
         ],
     )
 
+    assert result.exit_code == 1
+    assert "no meta-data schema" in visible_output(result.output)
+    assert "--meta-data-schema" in visible_output(result.output)
+    assert marker.read_text() == "keep"
+
+
+def test_generate_rejects_missing_schema_file_before_deleting_output(tmp_path) -> None:
+    schema_path = tmp_path / "missing-schema.json"
+    meta_data_schema_path = write_permissive_schema(tmp_path)
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "keep.txt"
+    marker.write_text("keep")
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--publish-dir",
+            str(publish_dir),
+            "--run-log-schema",
+            str(schema_path),
+            "--meta-data-schema",
+            str(meta_data_schema_path),
+        ],
+    )
+
     output = visible_output(result.output)
     assert result.exit_code == 1
     assert "cannot read run-log schema" in output
+    assert schema_path.name in output
+    assert marker.read_text() == "keep"
+
+
+def test_generate_rejects_missing_meta_data_schema_before_deleting_output(
+    tmp_path,
+) -> None:
+    run_log_schema_path = write_permissive_schema(tmp_path)
+    schema_path = tmp_path / "missing-meta-data-schema.json"
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "keep.txt"
+    marker.write_text("keep")
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--publish-dir",
+            str(publish_dir),
+            "--run-log-schema",
+            str(run_log_schema_path),
+            "--meta-data-schema",
+            str(schema_path),
+        ],
+    )
+
+    output = visible_output(result.output)
+    assert result.exit_code == 1
+    assert "cannot read meta-data schema" in output
     assert schema_path.name in output
     assert marker.read_text() == "keep"
 
@@ -148,6 +209,7 @@ def test_generate_rejects_unusable_schema_before_deleting_output(
 ) -> None:
     schema_path = tmp_path / "schema.json"
     schema_path.write_text(schema_text)
+    meta_data_schema_path = write_permissive_schema(tmp_path)
     publish_dir = tmp_path / "publish"
     publish_dir.mkdir()
     marker = publish_dir / "keep.txt"
@@ -160,6 +222,46 @@ def test_generate_rejects_unusable_schema_before_deleting_output(
             "--publish-dir",
             str(publish_dir),
             "--run-log-schema",
+            str(schema_path),
+            "--meta-data-schema",
+            str(meta_data_schema_path),
+        ],
+    )
+
+    output = visible_output(result.output)
+    assert result.exit_code == 1
+    assert expected in output
+    assert schema_path.name in output
+    assert marker.read_text() == "keep"
+
+
+@pytest.mark.parametrize(
+    ("schema_text", "expected"),
+    [
+        ("{", "malformed meta-data schema JSON"),
+        ('{"type": 7}', "invalid Draft 7 meta-data schema"),
+    ],
+)
+def test_generate_rejects_unusable_meta_data_schema_before_deleting_output(
+    tmp_path, schema_text: str, expected: str
+) -> None:
+    run_log_schema_path = write_permissive_schema(tmp_path)
+    schema_path = tmp_path / "meta-data-schema.json"
+    schema_path.write_text(schema_text)
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "keep.txt"
+    marker.write_text("keep")
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--publish-dir",
+            str(publish_dir),
+            "--run-log-schema",
+            str(run_log_schema_path),
+            "--meta-data-schema",
             str(schema_path),
         ],
     )
@@ -209,6 +311,8 @@ def test_generate_reports_final_bundle_schema_errors(tmp_path) -> None:
             str(manifest_path),
             "--run-log-schema",
             str(schema_path),
+            "--meta-data-schema",
+            str(schema_path),
         ],
     )
 
@@ -219,6 +323,52 @@ def test_generate_reports_final_bundle_schema_errors(tmp_path) -> None:
     assert bundle_path.parent.name in output
     assert schema_path.name in output
     assert "/iters/0/type" in output
+    assert not manifest_path.exists()
+
+
+def test_generate_reports_final_meta_data_schema_errors(tmp_path) -> None:
+    run_log_schema_path = write_permissive_schema(tmp_path)
+    schema_path = tmp_path / "meta-data-schema.json"
+    schema_path.write_text(
+        json.dumps(
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {"version": {"const": 999}},
+            }
+        )
+    )
+    publish_dir = tmp_path / "publish"
+    manifest_path = tmp_path / "manifest.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--runs",
+            "1",
+            "--fill",
+            "ok",
+            "--dates",
+            "2026-04-25",
+            "--publish-dir",
+            str(publish_dir),
+            "--manifest",
+            str(manifest_path),
+            "--run-log-schema",
+            str(run_log_schema_path),
+            "--meta-data-schema",
+            str(schema_path),
+        ],
+    )
+
+    output = visible_output(result.output)
+    meta_data_path = next(publish_dir.glob("*/meta_data.json"))
+    assert result.exit_code == 1
+    assert "generated meta-data failed Draft 7 schema validation" in output
+    assert meta_data_path.parent.name in output
+    assert schema_path.name in output
+    assert "/version" in output
     assert not manifest_path.exists()
 
 
@@ -280,6 +430,8 @@ def test_generated_bundles_satisfy_timestamp_invariants(tmp_path) -> None:
             str(publish_dir),
             "--run-log-schema",
             str(schema_path),
+            "--meta-data-schema",
+            str(schema_path),
         ],
     )
     assert result.exit_code == 0, visible_output(result.output)
@@ -331,28 +483,51 @@ def test_generated_bundles_satisfy_timestamp_invariants(tmp_path) -> None:
 
 
 @pytest.mark.skipif(
-    not AUTHORITATIVE_SCHEMA.is_file(),
-    reason="authoritative Bublik run-log schema checkout is unavailable",
+    not AUTHORITATIVE_RUN_LOG_SCHEMA.is_file()
+    or not AUTHORITATIVE_META_DATA_SCHEMA.is_file(),
+    reason="authoritative Bublik schemas checkout is unavailable",
 )
-def test_all_bundled_providers_validate_against_authoritative_schema(tmp_path) -> None:
+def test_all_providers_and_conclusions_validate_against_authoritative_schemas(
+    tmp_path,
+) -> None:
     publish_dir = tmp_path / "publish"
+    conclusions = (
+        "ok",
+        "nok-warning",
+        "nok-error",
+        "warning",
+        "error",
+        "running",
+        "busy",
+        "stopped",
+        "interrupted",
+        "compromised",
+    )
+    day_spec = ",".join(f"{conclusion}=1" for conclusion in conclusions)
 
     result = runner.invoke(
         app,
         [
             "generate",
-            "--runs",
-            "3",
-            "--fill",
-            "ok",
-            "--dates",
-            "2026-04-25",
+            "--day",
+            f"2026-04-25:{day_spec}",
             "--publish-dir",
             str(publish_dir),
             "--run-log-schema",
-            str(AUTHORITATIVE_SCHEMA),
+            str(AUTHORITATIVE_RUN_LOG_SCHEMA),
+            "--meta-data-schema",
+            str(AUTHORITATIVE_META_DATA_SCHEMA),
         ],
     )
 
     assert result.exit_code == 0, visible_output(result.output)
-    assert len(list(publish_dir.glob("*/bublik.json"))) == 3
+    bublik_paths = list(publish_dir.glob("*/bublik.json"))
+    meta_data_paths = list(publish_dir.glob("*/meta_data.json"))
+    assert len(bublik_paths) == 30
+    assert len(meta_data_paths) == 30
+    for meta_data_path in meta_data_paths:
+        meta_data = json.loads(meta_data_path.read_text())
+        e2e_run_id = next(
+            meta for meta in meta_data["metas"] if meta["name"] == "E2E_RUN_ID"
+        )
+        assert "type" not in e2e_run_id

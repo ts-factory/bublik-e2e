@@ -14,6 +14,7 @@ def make_args(**overrides: object) -> argparse.Namespace:
         "password": None,
         "publish_dir": None,
         "run_log_schema": None,
+        "meta_data_schema": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -98,3 +99,29 @@ def test_run_log_schema_cli_overrides_environment(monkeypatch, tmp_path: Path) -
     )
 
     assert settings.run_log_schema == tmp_path / "cli-schema.json"
+
+
+def test_meta_data_schema_uses_env_file_value(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BUBLIK_E2E_META_DATA_SCHEMA", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("BUBLIK_E2E_META_DATA_SCHEMA=schemas/meta-data.json\n")
+
+    settings = Settings.from_args(make_args(env_file=env_file))
+
+    assert settings.meta_data_schema == tmp_path / "schemas" / "meta-data.json"
+
+
+def test_meta_data_schema_cli_overrides_environment(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BUBLIK_E2E_META_DATA_SCHEMA", "env-schema.json")
+    env_file = tmp_path / ".env"
+    env_file.write_text("BUBLIK_E2E_META_DATA_SCHEMA=file-schema.json\n")
+
+    settings = Settings.from_args(
+        make_args(env_file=env_file, meta_data_schema=Path("cli-schema.json"))
+    )
+
+    assert settings.meta_data_schema == tmp_path / "cli-schema.json"

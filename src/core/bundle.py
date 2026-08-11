@@ -167,11 +167,15 @@ def patch_bundle(
         # float Bublik stores for the node — so run.start == first node start and
         # run.finish == last node finish, with no millisecond-truncation gap.
         run_tz = timezone(start_offset)
-        start_timestamp = datetime.fromtimestamp(root["start_ts_utc"], tz=run_tz).isoformat()
-        finish_timestamp = datetime.fromtimestamp(root["end_ts_utc"], tz=run_tz).isoformat()
+        start_timestamp = datetime.fromtimestamp(
+            root["start_ts_utc"], tz=run_tz
+        ).isoformat()
+        finish_timestamp = datetime.fromtimestamp(
+            root["end_ts_utc"], tz=run_tz
+        ).isoformat()
     upsert_meta(meta_items, "PROJECT", spec.project)
     upsert_meta(meta_items, "RUN_STATUS", spec.metas.get("RUN_STATUS", "DONE"))
-    upsert_meta(meta_items, "E2E_RUN_ID", spec.fixture_id, "label")
+    upsert_meta(meta_items, "E2E_RUN_ID", spec.fixture_id)
     upsert_meta(meta_items, "CFG", spec.id)
     upsert_meta(meta_items, "START_TIMESTAMP", start_timestamp, "timestamp")
     if spec.conclusion not in UNFINISHED_CONCLUSIONS:
@@ -319,9 +323,7 @@ def apply_mix(
     for item in mix:
         prop, type_name = parse_mix_key(item.key)
         count = (
-            math.ceil(total * item.value / 100)
-            if item.is_percent
-            else int(item.value)
+            math.ceil(total * item.value / 100) if item.is_percent else int(item.value)
         )
         if count < 0:
             raise CliError(f"invalid negative count in mix {item.key}")

@@ -4,7 +4,8 @@ Deterministic Bublik fixture generation, publication, and API import, packaged
 as a single, standalone, installable CLI with all fixture providers bundled.
 
 ```text
-fixture provider -> generate bundles -> validate bublik.json against a Draft 7 schema
+fixture provider -> generate bundles -> validate bublik.json and meta_data.json
+                                    against explicit Draft 7 schemas
                  -> write into --publish-dir (served at {url}/logs/)
                  -> write manifest v1
                  -> import through the API (cookie auth)
@@ -66,6 +67,7 @@ URL and credentials come from flags, falling back to environment variables
 | `--password` | `DJANGO_SUPERUSER_PASSWORD` | `admin` |
 | `--publish-dir` | `BUBLIK_E2E_PUBLISH_DIR` | *(required for generate/run)* |
 | `--run-log-schema` | `BUBLIK_E2E_RUN_LOG_SCHEMA` | *(required for generate/run)* |
+| `--meta-data-schema` | `BUBLIK_E2E_META_DATA_SCHEMA` | *(required for generate/run)* |
 | `--manifest` | — | `./.e2e/e2e-manifest.json` |
 
 `--url` may include a path prefix (e.g. `http://localhost/bublik`); auth, API,
@@ -84,11 +86,12 @@ which is served at `{url}/logs/e2e/`.
 
 Generate and publish bundles (omit `--fixture` to auto-discover every bundled
 provider). The run count is derived from the `--day` specs, so `--runs` is not
-needed here. `generate` and `run` require Bublik's Draft 7 run-log schema; pass
-its path explicitly or set `BUBLIK_E2E_RUN_LOG_SCHEMA` (including in the file
-passed with `--env-file`). The CLI checks that the schema is readable, valid
-Draft 7 before clearing `--publish-dir`, then validates each finalized
-`bublik.json` after result mixes are applied and before deriving the manifest.
+needed here. `generate` and `run` require Bublik's Draft 7 run-log and metadata
+schemas; pass their paths explicitly or set `BUBLIK_E2E_RUN_LOG_SCHEMA` and
+`BUBLIK_E2E_META_DATA_SCHEMA` (including in the file passed with `--env-file`).
+The CLI checks that both schemas are readable and valid Draft 7 before clearing
+`--publish-dir`, then validates each finalized `bublik.json` and `meta_data.json`
+after result mixes are applied and before deriving the manifest.
 
 Validation failures identify the bundle and schema paths and list deterministic
 JSON-pointer errors, capped at the first 20 errors:
@@ -98,6 +101,7 @@ bublik-e2e generate \
   --url http://localhost:42000 \
   --publish-dir ./data/logs/logs/e2e \
   --run-log-schema ../bublik-docker/bublik/bublik/data/schemas/run_log.json \
+  --meta-data-schema ../bublik-docker/bublik/bublik/data/schemas/meta_data.json \
   --mix "warning-mix:unexpectedFailed=20%,unexpectedSkipped=5%" \
   --day "2026-04-21:basic.ok=1,basic.warning=1,basic.error=1" \
   --day "2026-04-23:dpdk-ethdev-ts.nok-warning@warning-mix=1,dpdk-ethdev-ts.nok-error=1,dpdk-ethdev-ts.compromised=1"
@@ -110,6 +114,7 @@ inline the mix directly on the `--day` spec (`;`-separated, no pre-definition):
 bublik-e2e generate \
   --publish-dir ./data/logs/logs/e2e \
   --run-log-schema ../bublik-docker/bublik/bublik/data/schemas/run_log.json \
+  --meta-data-schema ../bublik-docker/bublik/bublik/data/schemas/meta_data.json \
   --day "2026-04-21:net-drv-ts.nok-warning@unexpectedFailed=20%;unexpectedSkipped=5%=2"
 ```
 
@@ -153,6 +158,7 @@ bublik-e2e run \
   --setup-projects \
   --publish-dir ./data/logs/logs/e2e \
   --run-log-schema ../bublik-docker/bublik/bublik/data/schemas/run_log.json \
+  --meta-data-schema ../bublik-docker/bublik/bublik/data/schemas/meta_data.json \
   --runs 100 --fill ok --dates "2026-04-01..2026-04-30"
 ```
 
