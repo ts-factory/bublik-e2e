@@ -57,11 +57,19 @@ jobs:
     name: Quality checks
     runs-on: ubuntu-latest
     needs: validate
+    env:
+      BUBLIK_DJANGO_ROOT: ${{ github.workspace }}/bublik-django
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Checkout Bublik schemas
+        uses: actions/checkout@v4
+        with:
+          repository: ts-factory/bublik
+          path: bublik-django
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5

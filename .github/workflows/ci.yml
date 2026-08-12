@@ -38,6 +38,8 @@ jobs:
   test:
     name: Tests / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    env:
+      BUBLIK_DJANGO_ROOT: ${{ github.workspace }}/bublik-django
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +47,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Checkout Bublik schemas
+        uses: actions/checkout@v4
+        with:
+          repository: ts-factory/bublik
+          path: bublik-django
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
