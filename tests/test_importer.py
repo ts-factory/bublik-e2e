@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -127,6 +128,118 @@ def test_stall_persists_partial_progress(
     assert saved["bundles"][0]["runUrl"] == "http://host/v2/runs/1"
 
 
+def test_failure_status_with_run_id_is_still_failure(
+    tmp_path: Path, fake_time: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _manifest(1)
+    manifest_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(
+        importer,
+        "curl_json",
+        lambda url: [
+            {
+                "status": "FAILURE",
+                "run_source_url": manifest["bundles"][0]["importUrl"],
+                "run_id": 17,
+            }
+        ],
+    )
+
+    with pytest.raises(CliError, match="fixture import failed"):
+        importer.persist_imported_runs(
+            manifest_path, manifest, "http://host", _jobs(manifest), timeout=5
+        )
+
+    assert not manifest_path.exists()
+
+
+def test_running_with_run_id_is_polled_until_later_failure(
+    tmp_path: Path, fake_time: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _manifest(1)
+    manifest_path = tmp_path / "manifest.json"
+    lifecycle = iter(("RUNNING", "FAILURE"))
+    polls = 0
+
+    def fake_curl(url: str) -> list[dict[str, object]]:
+        nonlocal polls
+        polls += 1
+        return [
+            {
+                "status": next(lifecycle),
+                "run_source_url": manifest["bundles"][0]["importUrl"],
+                "run_id": 17,
+            }
+        ]
+
+    monkeypatch.setattr(importer, "curl_json", fake_curl)
+
+    with pytest.raises(CliError, match="fixture import failed"):
+        importer.persist_imported_runs(
+            manifest_path, manifest, "http://host", _jobs(manifest), timeout=5
+        )
+
+    assert polls == 2
+    assert manifest["bundles"][0]["runId"] == 17
+    assert not manifest_path.exists()
+
+
+def test_running_with_run_id_is_polled_until_success(
+    tmp_path: Path, fake_time: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _manifest(1)
+    manifest_path = tmp_path / "manifest.json"
+    lifecycle = iter(("RUNNING", "SUCCESS"))
+    polls = 0
+
+    def fake_curl(url: str) -> list[dict[str, object]]:
+        nonlocal polls
+        polls += 1
+        return [
+            {
+                "status": next(lifecycle),
+                "run_source_url": manifest["bundles"][0]["importUrl"],
+                "run_id": 17,
+            }
+        ]
+
+    monkeypatch.setattr(importer, "curl_json", fake_curl)
+
+    completed = importer.persist_imported_runs(
+        manifest_path, manifest, "http://host", _jobs(manifest), timeout=5
+    )
+
+    assert polls == 2
+    assert completed == {"run-0": 1002.0}
+    assert read_json(manifest_path)["bundles"][0]["runId"] == 17
+
+
+def test_nonterminal_run_id_is_not_persisted_on_timeout(
+    tmp_path: Path, fake_time: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _manifest(1)
+    manifest_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(
+        importer,
+        "curl_json",
+        lambda url: [
+            {
+                "status": "RUNNING",
+                "run_source_url": manifest["bundles"][0]["importUrl"],
+                "run_id": 17,
+            }
+        ],
+    )
+
+    with pytest.raises(CliError, match="no import progress"):
+        importer.persist_imported_runs(
+            manifest_path, manifest, "http://host", _jobs(manifest), timeout=5
+        )
+
+    assert manifest["bundles"][0]["runId"] is None
+    assert not manifest_path.exists()
+
+
 def test_reconcile_refreshes_run_ids_from_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -154,6 +267,58 @@ def test_reconcile_refreshes_run_ids_from_database(
     importer.reconcile_run_ids(manifest, "http://host")
 
     assert [b.get("runId") for b in manifest["bundles"]] == [41, None, None]
+
+
+def test_find_existing_run_id_ignores_failed_and_nonterminal_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import_url = "http://host/logs/run-0/"
+    monkeypatch.setattr(
+        importer,
+        "curl_json",
+        lambda *args, **kwargs: {
+            "results": [
+                {
+                    "status": "FAILURE",
+                    "run_source_url": import_url,
+                    "run_id": 12,
+                },
+                {
+                    "status": "RUNNING",
+                    "run_source_url": import_url,
+                    "run_id": 13,
+                },
+            ]
+        },
+    )
+
+    assert importer.find_existing_run_id("http://host", import_url) is None
+
+
+def test_find_existing_run_id_selects_success_after_failed_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import_url = "http://host/logs/run-0/"
+    monkeypatch.setattr(
+        importer,
+        "curl_json",
+        lambda *args, **kwargs: {
+            "results": [
+                {
+                    "status": "FAILURE",
+                    "run_source_url": import_url,
+                    "run_id": 12,
+                },
+                {
+                    "status": "SUCCESS",
+                    "run_source_url": import_url,
+                    "run_id": 41,
+                },
+            ]
+        },
+    )
+
+    assert importer.find_existing_run_id("http://host", import_url) == 41
 
 
 def test_import_via_api_skips_ui_bundles_and_reused_runs(
@@ -200,3 +365,37 @@ def test_import_via_api_skips_ui_bundles_and_reused_runs(
 
     assert scheduled == [manifest["bundles"][2]["importUrl"]]
     assert [b.get("runId") for b in manifest["bundles"]] == [41, None, 42]
+
+
+def test_curl_json_sets_network_and_process_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, '{"ok":true}\n200', "")
+
+    monkeypatch.setattr(importer.subprocess, "run", fake_run)
+
+    assert importer.curl_json("http://host/api") == {"ok": True}
+    assert captured["timeout"] == 35
+    command = captured["command"]
+    assert command[command.index("--connect-timeout") + 1] == "10"
+    assert command[command.index("--max-time") + 1] == "30"
+
+
+def test_curl_process_timeout_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        importer.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+        ),
+    )
+
+    with pytest.raises(CliError, match="curl timed out"):
+        importer.curl_json("http://host/api")

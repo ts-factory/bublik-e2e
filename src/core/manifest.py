@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import shutil
+import tempfile
 from typing import Any
 import urllib.parse
+import uuid
 
 from pydantic import ValidationError
 
@@ -248,6 +251,29 @@ def unique_sorted(values: Any) -> list[str]:
     return sorted(collected)
 
 
+def _remove_publication(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _rollback_publication(publish_dir: Path, backup_dir: Path | None) -> None:
+    """Restore the prior publication without risking loss of the replacement."""
+    if backup_dir is None:
+        _remove_publication(publish_dir)
+        return
+
+    failed_dir = publish_dir.parent / f".{publish_dir.name}.failed-{uuid.uuid4().hex}"
+    os.replace(publish_dir, failed_dir)
+    try:
+        os.replace(backup_dir, publish_dir)
+    except BaseException:
+        os.replace(failed_dir, publish_dir)
+        raise
+    _remove_publication(failed_dir)
+
+
 def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) -> None:
     settings = Settings.from_args(args)
     publish_dir = settings.publish_dir
@@ -279,127 +305,166 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
     mixes = build_mixes(args)
     planned_runs, empty_dates = build_plan(args, fixtures, mixes)
     bundles: list[dict[str, Any]] = []
-
-    if publish_dir.exists():
-        shutil.rmtree(publish_dir)
-    publish_dir.mkdir(parents=True, exist_ok=True)
-
-    for plan in planned_runs:
-        if plan.mix_name not in mixes:
-            raise CliError(f"unknown mix {plan.mix_name!r}")
-        spec = spec_from_plan(plan)
-        bundle_output_dir = publish_dir / spec.id
-        generate_bundle(plan.fixture, spec, bundle_output_dir, args.pretty)
-        apply_mix(bundle_output_dir, mixes[plan.mix_name], spec.conclusion, args.pretty)
-        validate_run_log(
-            bundle_output_dir / "bublik.json",
-            run_log_schema_path,
-            run_log_validator,
+    publication_dir = (
+        publish_dir.resolve(strict=False) if publish_dir.is_symlink() else publish_dir
+    )
+    publication_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{publication_dir.name}.staging-", dir=publication_dir.parent
         )
-        validate_meta_data(
-            bundle_output_dir / "meta_data.json",
-            meta_data_schema_path,
-            meta_data_validator,
-        )
+    )
 
-        quoted = "/".join(urllib.parse.quote(part) for part in (seg, spec.id) if part)
-        import_url = f"{logs_base}/{quoted}"
+    try:
+        for plan in planned_runs:
+            if plan.mix_name not in mixes:
+                raise CliError(f"unknown mix {plan.mix_name!r}")
+            spec = spec_from_plan(plan)
+            bundle_output_dir = staging_dir / spec.id
+            generate_bundle(plan.fixture, spec, bundle_output_dir, args.pretty)
+            apply_mix(
+                bundle_output_dir,
+                mixes[plan.mix_name],
+                spec.conclusion,
+                args.pretty,
+            )
+            validate_run_log(
+                bundle_output_dir / "bublik.json",
+                run_log_schema_path,
+                run_log_validator,
+            )
+            validate_meta_data(
+                bundle_output_dir / "meta_data.json",
+                meta_data_schema_path,
+                meta_data_validator,
+            )
 
-        meta = read_json(bundle_output_dir / "meta_data.json")
-        bublik = read_json(bundle_output_dir / "bublik.json")
-        metas = meta.get("metas", [])
-        iterations, matrix = flatten_iterations(bundle_output_dir)
-        status_by_nok = expected_status_by_nok(matrix)
-        requirements = unique_sorted(
-            req for leaf in iterations for req in leaf.get("reqs", [])
-        )
-        verdicts = unique_sorted(
-            verdict for leaf in iterations for verdict in leaf.get("verdicts", [])
-        )
-        measurements = summarize_measurements(iterations)
-        packages = collect_packages(bundle_output_dir)
+            quoted = "/".join(
+                urllib.parse.quote(part) for part in (seg, spec.id) if part
+            )
+            import_url = f"{logs_base}/{quoted}"
 
-        bundles.append(
-            {
-                "id": spec.id,
-                "fixture": spec.fixture_name,
-                "conclusionSpec": spec.conclusion,
-                "mix": spec.mix_name,
-                "date": spec.run_date,
-                "importUrl": import_url,
-                "importVia": plan.import_via,
-                "project": spec.project,
-                "e2eRunId": spec.fixture_id,
-                "runStatus": get_meta_value(metas, "RUN_STATUS"),
-                "startTimestamp": get_meta_value(metas, "START_TIMESTAMP"),
-                "finishTimestamp": get_meta_value(metas, "FINISH_TIMESTAMP"),
-                "tags": bublik.get("tags", {}),
-                "revisions": parse_revisions(metas),
-                "runUrlTemplate": run_url_template,
-                "logUrlTemplate": log_url_template,
-                "expectedRuns": [
-                    {
-                        "name": get_expected_run_name(bundle_output_dir),
-                        "dashboardDate": get_dashboard_date(bundle_output_dir),
-                        "iterationCount": len(iterations),
-                        "expectedStatus": RUN_STATUS_BY_CONCLUSION[spec.conclusion],
-                        "expectedStatusByNok": status_by_nok,
-                        "expectedConclusion": EXPECTED_CONCLUSION[spec.conclusion],
-                        "expectedConclusionReason": expected_reason(
-                            spec.conclusion, matrix
-                        ),
-                        "expectedMatrix": {
-                            key: len(matrix.get(key, [])) for key in MATRIX_KEYS
-                        },
-                        "tags": bublik.get("tags", {}),
-                        "requirements": requirements,
-                        "verdicts": verdicts,
-                        "measurements": measurements,
-                        "packages": packages,
-                        "sampleTests": sample_tests_from_matrix(matrix),
-                    }
-                ],
-            }
-        )
+            meta = read_json(bundle_output_dir / "meta_data.json")
+            bublik = read_json(bundle_output_dir / "bublik.json")
+            metas = meta.get("metas", [])
+            iterations, matrix = flatten_iterations(bundle_output_dir)
+            status_by_nok = expected_status_by_nok(matrix)
+            requirements = unique_sorted(
+                req for leaf in iterations for req in leaf.get("reqs", [])
+            )
+            verdicts = unique_sorted(
+                verdict for leaf in iterations for verdict in leaf.get("verdicts", [])
+            )
+            measurements = summarize_measurements(iterations)
+            packages = collect_packages(bundle_output_dir)
 
-    seen_configs: set[tuple[str, str]] = set()
-    configs: list[dict[str, Any]] = []
-    for fixture in fixtures.values():
-        for report_config in getattr(fixture, "report_configs", ()):
-            key = (fixture.project, report_config["name"])
-            if key in seen_configs:
-                continue
-            seen_configs.add(key)
-            configs.append(
+            bundles.append(
                 {
-                    "project": fixture.project,
-                    "type": "report",
-                    "name": report_config["name"],
-                    "description": report_config.get("description", ""),
-                    "content": report_config["content"],
+                    "id": spec.id,
+                    "fixture": spec.fixture_name,
+                    "conclusionSpec": spec.conclusion,
+                    "mix": spec.mix_name,
+                    "date": spec.run_date,
+                    "importUrl": import_url,
+                    "importVia": plan.import_via,
+                    "project": spec.project,
+                    "e2eRunId": spec.fixture_id,
+                    "runStatus": get_meta_value(metas, "RUN_STATUS"),
+                    "startTimestamp": get_meta_value(metas, "START_TIMESTAMP"),
+                    "finishTimestamp": get_meta_value(metas, "FINISH_TIMESTAMP"),
+                    "tags": bublik.get("tags", {}),
+                    "revisions": parse_revisions(metas),
+                    "runUrlTemplate": run_url_template,
+                    "logUrlTemplate": log_url_template,
+                    "expectedRuns": [
+                        {
+                            "name": get_expected_run_name(bundle_output_dir),
+                            "dashboardDate": get_dashboard_date(bundle_output_dir),
+                            "iterationCount": len(iterations),
+                            "expectedStatus": RUN_STATUS_BY_CONCLUSION[spec.conclusion],
+                            "expectedStatusByNok": status_by_nok,
+                            "expectedConclusion": EXPECTED_CONCLUSION[spec.conclusion],
+                            "expectedConclusionReason": expected_reason(
+                                spec.conclusion, matrix
+                            ),
+                            "expectedMatrix": {
+                                key: len(matrix.get(key, [])) for key in MATRIX_KEYS
+                            },
+                            "tags": bublik.get("tags", {}),
+                            "requirements": requirements,
+                            "verdicts": verdicts,
+                            "measurements": measurements,
+                            "packages": packages,
+                            "sampleTests": sample_tests_from_matrix(matrix),
+                        }
+                    ],
                 }
             )
 
-    manifest = {
-        "version": 1,
-        "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "baseUrl": settings.base_url,
-        "uiBaseUrl": settings.ui_base_url,
-        "dashboardUrl": settings.dashboard_url,
-        "historyUrl": settings.history_url,
-        "importUrl": f"{logs_base}/{urllib.parse.quote(seg)}/",
-        "emptyDates": sorted(set(empty_dates)),
-        "configs": configs,
-        "bundles": bundles,
-    }
-    # Validate the assembled manifest against the canonical schema before writing.
-    # We keep writing the original dict (byte-for-byte unchanged output); the model
-    # only guards shape — any drift raises here instead of reaching the UI.
-    try:
-        Manifest.model_validate(manifest)
-    except ValidationError as exc:
-        raise CliError(f"generated manifest failed schema validation:\n{exc}") from exc
-    write_json(manifest_path, manifest, args.pretty)
+        seen_configs: set[tuple[str, str]] = set()
+        configs: list[dict[str, Any]] = []
+        for fixture in fixtures.values():
+            for report_config in getattr(fixture, "report_configs", ()):
+                key = (fixture.project, report_config["name"])
+                if key in seen_configs:
+                    continue
+                seen_configs.add(key)
+                configs.append(
+                    {
+                        "project": fixture.project,
+                        "type": "report",
+                        "name": report_config["name"],
+                        "description": report_config.get("description", ""),
+                        "content": report_config["content"],
+                    }
+                )
+
+        manifest = {
+            "version": 1,
+            "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "baseUrl": settings.base_url,
+            "uiBaseUrl": settings.ui_base_url,
+            "dashboardUrl": settings.dashboard_url,
+            "historyUrl": settings.history_url,
+            "importUrl": f"{logs_base}/{urllib.parse.quote(seg)}/",
+            "emptyDates": sorted(set(empty_dates)),
+            "configs": configs,
+            "bundles": bundles,
+        }
+        # Validate before replacing either published artifact.
+        try:
+            Manifest.model_validate(manifest)
+        except ValidationError as exc:
+            raise CliError(
+                f"generated manifest failed schema validation:\n{exc}"
+            ) from exc
+
+        backup_dir: Path | None = None
+        if publication_dir.exists():
+            backup_dir = publication_dir.parent / (
+                f".{publication_dir.name}.backup-{uuid.uuid4().hex}"
+            )
+            os.replace(publication_dir, backup_dir)
+        try:
+            os.replace(staging_dir, publication_dir)
+            try:
+                write_json(manifest_path, manifest, args.pretty)
+            except BaseException:
+                _rollback_publication(publication_dir, backup_dir)
+                raise
+        except BaseException:
+            if (
+                backup_dir is not None
+                and backup_dir.exists()
+                and not publication_dir.exists()
+            ):
+                os.replace(backup_dir, publication_dir)
+            raise
+        if backup_dir is not None:
+            _remove_publication(backup_dir)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
     if show_summary:
         render_run_summary(manifest, console, title="Generated runs")
     print(str(manifest_path))

@@ -51,7 +51,17 @@ def curl_json(
     payload: dict[str, Any] | None = None,
     cookie_jar: Path | None = None,
 ) -> Any:
-    command = ["curl", "--silent", "--show-error", "--write-out", "\n%{http_code}"]
+    command = [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "30",
+        "--write-out",
+        "\n%{http_code}",
+    ]
     if cookie_jar is not None:
         command.extend(["--cookie", str(cookie_jar), "--cookie-jar", str(cookie_jar)])
     if method != "GET":
@@ -66,12 +76,16 @@ def curl_json(
             ]
         )
     command.append(url)
-    completed = subprocess.run(
-        command,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=35,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CliError(f"curl timed out for {url}") from exc
     if completed.returncode != 0:
         raise CliError(f"curl failed for {url}: {completed.stderr.strip()}")
     body, separator, status_raw = completed.stdout.rpartition("\n")
@@ -164,7 +178,9 @@ class ProgressDisplay:
         if snapshot == self.last_snapshot:
             return
         self.last_snapshot = snapshot
-        done = sum(1 for *_, run_id in snapshot if run_id)
+        done = sum(
+            1 for _, status, run_id in snapshot if status == "SUCCESS" and run_id
+        )
         self.live.update(
             build_run_table(
                 self.bundles,
@@ -182,9 +198,9 @@ def find_existing_run_id(
     """Look up a previously imported run id for ``import_url``, if any.
 
     Queries the import-event log (``session_import``) filtered by source URL and
-    returns the first task that produced a run id. Used to reconcile the manifest
-    against the database before scheduling: already-imported bundles are skipped,
-    and stale ``runId`` values from a previous stack are cleared.
+    returns the first successfully completed task that produced a run id. Used to
+    reconcile the manifest against the database before scheduling: already-imported
+    bundles are skipped, and stale or failed ``runId`` values are cleared.
     """
     query = urllib.parse.urlencode({"url": import_url, "page_size": 10000})
     try:
@@ -197,6 +213,8 @@ def find_existing_run_id(
     expected = normalize_url(import_url)
     for task in results:
         if normalize_url(str(task.get("run_source_url", ""))) != expected:
+            continue
+        if str(task.get("status", "")).upper() != "SUCCESS":
             continue
         run_id = task.get("run_id")
         if isinstance(run_id, int) and run_id > 0:
@@ -256,17 +274,18 @@ def persist_imported_runs(
     # Wall-clock time each bundle first received a run id, used to attribute the
     # sequential import's elapsed time to each fixture type in the final summary.
     completed_at: dict[str, float] = {}
+    successful_ids: set[str] = set()
     last_payload: list[Any] = []
     prev_snapshot: tuple[Any, ...] | None = None
 
     with ProgressDisplay(target_bundles, base_url) as display:
         while datetime.now().timestamp() < deadline:
-            # One job per bundle: poll only the jobs whose bundle is still
-            # missing a runId, and merge their task lists into a single payload.
+            # A run id can appear before the task reaches a terminal state. Keep
+            # polling until SUCCESS so a later FAILURE cannot be missed.
             last_payload = []
             polled = False
             for bundle in target_bundles:
-                if bundle.get("runId"):
+                if bundle["id"] in successful_ids:
                     continue
                 try:
                     last_payload.extend(
@@ -285,22 +304,23 @@ def persist_imported_runs(
                 bundle = bundles_by_url.get(
                     normalize_url(task.get("run_source_url", ""))
                 )
-                if bundle is None or bundle.get("runId"):
+                if bundle is None:
                     continue
+                status = str(task.get("status", "") or "PENDING").upper()
                 run_id = task.get("run_id")
                 if isinstance(run_id, int) and run_id > 0:
                     bundle["runId"] = run_id
+                status_by_id[bundle["id"]] = status
+                if status == "SUCCESS" and bundle.get("runId"):
+                    successful_ids.add(bundle["id"])
                     completed_at.setdefault(bundle["id"], datetime.now().timestamp())
-                status_by_id[bundle["id"]] = str(
-                    task.get("status", "") or "PENDING"
-                ).upper()
 
             display.update(status_by_id)
 
             # Any change in completed runs or per-task status counts as progress and
             # extends the no-progress deadline.
             snapshot = (
-                sum(1 for bundle in target_bundles if bundle.get("runId")),
+                tuple(sorted(successful_ids)),
                 tuple(
                     sorted(
                         (
@@ -315,27 +335,32 @@ def persist_imported_runs(
                 prev_snapshot = snapshot
                 deadline = datetime.now().timestamp() + timeout
 
-            if all(bundle.get("runId") for bundle in target_bundles):
-                resolve_deep_links(manifest)
-                write_json(manifest_path, manifest, True)
-                return completed_at
-
             failed = [
                 task
                 for task in last_payload
                 if str(task.get("status", "")).upper() == "FAILURE"
-                and not (isinstance(task.get("run_id"), int) and task["run_id"] > 0)
             ]
             if failed:
                 raise CliError(f"fixture import failed: {json.dumps(failed, indent=2)}")
 
+            if len(successful_ids) == len(target_bundles):
+                resolve_deep_links(manifest)
+                write_json(manifest_path, manifest, True)
+                return completed_at
+
             time_module.sleep(2)
 
-    missing = [bundle["id"] for bundle in target_bundles if not bundle.get("runId")]
-    # Persist whatever run ids landed before the stall so a re-run can resume and the
-    # imported runs keep working deep-links.
+    missing = [
+        bundle["id"] for bundle in target_bundles if bundle["id"] not in successful_ids
+    ]
+    # Persist only terminal successes. A nonterminal task may expose a run id before
+    # later failing, so carrying that id into the manifest would incorrectly mark the
+    # bundle as reusable.
+    for bundle in target_bundles:
+        if bundle["id"] not in successful_ids:
+            bundle["runId"] = None
     saved_note = ""
-    if any(bundle.get("runId") for bundle in manifest["bundles"]):
+    if successful_ids:
         resolve_deep_links(manifest)
         write_json(manifest_path, manifest, True)
         saved_note = "partial progress saved to manifest; "

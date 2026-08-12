@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from cli import app
+from core import manifest as manifest_module
 
 
 runner = CliRunner()
@@ -364,7 +365,11 @@ def test_generate_reports_final_bundle_schema_errors(tmp_path) -> None:
         )
     )
     publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "keep.txt"
+    marker.write_text("previous publication")
     manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"previous":true}\n')
 
     result = runner.invoke(
         app,
@@ -388,13 +393,14 @@ def test_generate_reports_final_bundle_schema_errors(tmp_path) -> None:
     )
 
     output = visible_output(result.output)
-    bundle_path = next(publish_dir.glob("*/bublik.json"))
     assert result.exit_code == 1
     assert "failed Draft 7 schema validation" in output
-    assert bundle_path.parent.name in output
+    assert "basic-2026-04-25-ok-001" in output
     assert schema_path.name in output
     assert "/iters/0/type" in output
-    assert not manifest_path.exists()
+    assert marker.read_text() == "previous publication"
+    assert list(publish_dir.iterdir()) == [marker]
+    assert manifest_path.read_text() == '{"previous":true}\n'
 
 
 def test_generate_reports_final_meta_data_schema_errors(tmp_path) -> None:
@@ -410,7 +416,11 @@ def test_generate_reports_final_meta_data_schema_errors(tmp_path) -> None:
         )
     )
     publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "keep.txt"
+    marker.write_text("previous publication")
     manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"previous":true}\n')
 
     result = runner.invoke(
         app,
@@ -434,13 +444,137 @@ def test_generate_reports_final_meta_data_schema_errors(tmp_path) -> None:
     )
 
     output = visible_output(result.output)
-    meta_data_path = next(publish_dir.glob("*/meta_data.json"))
     assert result.exit_code == 1
     assert "generated meta-data failed Draft 7 schema validation" in output
-    assert meta_data_path.parent.name in output
+    assert "basic-2026-04-25-ok-001" in output
     assert schema_path.name in output
     assert "/version" in output
-    assert not manifest_path.exists()
+    assert marker.read_text() == "previous publication"
+    assert list(publish_dir.iterdir()) == [marker]
+    assert manifest_path.read_text() == '{"previous":true}\n'
+
+
+def test_manifest_write_failure_rolls_back_published_fixtures(
+    tmp_path, monkeypatch
+) -> None:
+    schema_path = write_permissive_schema(tmp_path)
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "keep.txt"
+    marker.write_text("previous publication")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"previous":true}\n')
+    write_json = manifest_module.write_json
+
+    def fail_manifest_write(path: Path, payload: object, pretty: bool) -> None:
+        if path == manifest_path:
+            raise OSError("manifest write failed")
+        write_json(path, payload, pretty)
+
+    monkeypatch.setattr(manifest_module, "write_json", fail_manifest_write)
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--runs",
+            "1",
+            "--fill",
+            "ok",
+            "--dates",
+            "2026-04-25",
+            "--publish-dir",
+            str(publish_dir),
+            "--manifest",
+            str(manifest_path),
+            "--run-log-schema",
+            str(schema_path),
+            "--meta-data-schema",
+            str(schema_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, OSError)
+    assert str(result.exception) == "manifest write failed"
+    assert marker.read_text() == "previous publication"
+    assert list(publish_dir.iterdir()) == [marker]
+    assert manifest_path.read_text() == '{"previous":true}\n'
+
+
+def test_publication_rollback_restores_backup(tmp_path) -> None:
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    (publish_dir / "new.txt").write_text("new publication")
+    backup_dir = tmp_path / ".publish.backup-test"
+    backup_dir.mkdir()
+    marker = backup_dir / "keep.txt"
+    marker.write_text("previous publication")
+
+    manifest_module._rollback_publication(publish_dir, backup_dir)
+
+    assert not backup_dir.exists()
+    assert list(publish_dir.iterdir()) == [publish_dir / "keep.txt"]
+    assert (publish_dir / "keep.txt").read_text() == "previous publication"
+
+
+def test_publication_rollback_keeps_new_publication_if_restore_fails(
+    tmp_path, monkeypatch
+) -> None:
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "new.txt"
+    marker.write_text("new publication")
+    backup_dir = tmp_path / ".publish.backup-test"
+    backup_dir.mkdir()
+    (backup_dir / "keep.txt").write_text("previous publication")
+    replace = manifest_module.os.replace
+
+    def fail_restore(source: Path, destination: Path) -> None:
+        if source == backup_dir and destination == publish_dir:
+            raise OSError("restore failed")
+        replace(source, destination)
+
+    monkeypatch.setattr(manifest_module.os, "replace", fail_restore)
+
+    with pytest.raises(OSError, match="restore failed"):
+        manifest_module._rollback_publication(publish_dir, backup_dir)
+
+    assert marker.read_text() == "new publication"
+    assert (backup_dir / "keep.txt").read_text() == "previous publication"
+
+
+def test_generation_preserves_publish_directory_symlink(tmp_path) -> None:
+    schema_path = write_permissive_schema(tmp_path)
+    target = tmp_path / "served" / "publish"
+    target.mkdir(parents=True)
+    publish_dir = tmp_path / "publish-link"
+    publish_dir.symlink_to(target, target_is_directory=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--runs",
+            "1",
+            "--fill",
+            "ok",
+            "--dates",
+            "2026-04-25",
+            "--publish-dir",
+            str(publish_dir),
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--run-log-schema",
+            str(schema_path),
+            "--meta-data-schema",
+            str(schema_path),
+        ],
+    )
+
+    assert result.exit_code == 0, visible_output(result.output)
+    assert publish_dir.is_symlink()
+    assert len(list(target.glob("*/bublik.json"))) == 1
 
 
 def _meta_value(metas: list[dict], name: str) -> str | None:

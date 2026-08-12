@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 import math
 from pathlib import Path
+import re
 from typing import Any
 
 from core.common import CliError, read_json, write_json
@@ -131,6 +132,209 @@ def apply_run_profile(
     bublik_tags["source_profile"] = getattr(profile, "name", "real-world")
 
 
+def _status_level(status: str) -> str:
+    if status == "PASSED":
+        return "RING"
+    if status in {"FAILED", "KILLED", "CORED"}:
+        return "ERROR"
+    if status in {"SKIPPED", "FAKED", "INCOMPLETE"}:
+        return "WARN"
+    return "INFO"
+
+
+def _node_status(node: dict[str, Any]) -> str:
+    return node.get("obtained", {}).get("result", {}).get("status", "INCOMPLETE")
+
+
+def _duration_str(node: dict[str, Any]) -> str:
+    total_ms = max(
+        0, int((node.get("end_ts_utc", 0) - node.get("start_ts_utc", 0)) * 1000)
+    )
+    total_seconds, milliseconds = divmod(total_ms, 1000)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes}:{seconds}.{milliseconds:03}"
+
+
+def _update_entity_model(model: dict[str, Any], node: dict[str, Any]) -> None:
+    status = _node_status(node)
+    model.update(
+        {
+            "id": str(node["test_id"]),
+            "name": node["name"],
+            "entity": "Package" if node.get("type") == "pkg" else "Test",
+            "result": status,
+        }
+    )
+    extended = model.setdefault("extended_properties", {})
+    extended["path"] = node.get("path_str", "")
+    if node.get("type") == "test":
+        extended["tin"] = str(node.get("tin", -1))
+        extended["hash"] = node.get("hash", "")
+    else:
+        extended.pop("tin", None)
+        extended.pop("hash", None)
+    if node.get("err"):
+        model["error"] = node["err"]
+    else:
+        model.pop("error", None)
+
+
+def _update_node_meta(meta: dict[str, Any], node: dict[str, Any]) -> None:
+    meta.update(
+        {
+            "start": node["start_ts"].split(" ", 1)[1],
+            "end": node["end_ts"].split(" ", 1)[1],
+            "duration": _duration_str(node),
+        }
+    )
+    result = node.get("obtained", {}).get("result", {})
+    level = _status_level(_node_status(node))
+    for source, target, item_key in (
+        (result.get("verdicts") or [], "verdicts", "verdict"),
+        (result.get("artifacts") or [], "artifacts", "artifact"),
+    ):
+        if source:
+            meta[target] = [{item_key: item, "level": level} for item in source]
+        else:
+            meta.pop(target, None)
+
+
+def _text_row_content(row: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    for content in row.get("log_content") or []:
+        if content.get("type") == "te-log-table-content-text" and isinstance(
+            content.get("content"), str
+        ):
+            return content, content["content"]
+    return None
+
+
+def synchronize_json_logs(
+    bundle_dir: Path,
+    bublik: dict[str, Any],
+    pretty: bool,
+    *,
+    timestamp_delta: float = 0,
+    tz_offset: timedelta = timedelta(),
+) -> None:
+    """Synchronize provider-generated JSON logs with finalized run data.
+
+    Existing provider-specific table rows are retained. Only node/tree metadata,
+    known result rows, and timestamps changed by rebasing are updated.
+    """
+    json_dir = bundle_dir / "json"
+    tree_path = json_dir / "tree.json"
+    roots = bublik.get("iters") or []
+    if not tree_path.is_file() or not roots:
+        return
+
+    root = roots[0]
+    nodes_by_id: dict[int, dict[str, Any]] = {}
+
+    def collect(node: dict[str, Any]) -> None:
+        nodes_by_id[node["test_id"]] = node
+        for child in node.get("iters") or []:
+            collect(child)
+
+    collect(root)
+    tree_data = read_json(tree_path)
+    main_package = tree_data.get("main_package", "node_1_0.json")
+
+    def node_for_file(file_name: str) -> dict[str, Any] | None:
+        if file_name == main_package or file_name == "node_1_0.json":
+            return root
+        match = re.fullmatch(r"node_id(\d+)\.json", file_name)
+        return nodes_by_id.get(int(match.group(1))) if match else None
+
+    tree = tree_data.get("tree", {})
+    for file_name, entry in tree.items():
+        node = node_for_file(file_name)
+        if node is None:
+            continue
+        status = _node_status(node)
+        entry.update(
+            {
+                "id": file_name,
+                "name": node["name"],
+                "has_error": status not in {"PASSED", "SKIPPED"},
+                "skipped": status == "SKIPPED",
+                "entity": node["type"],
+            }
+        )
+    write_json(tree_path, tree_data, pretty)
+
+    files = set(tree)
+    if (json_dir / "node_id1.json").is_file():
+        files.add("node_id1.json")
+    run_timezone = timezone(tz_offset)
+    for file_name in files:
+        node = node_for_file(file_name)
+        path = json_dir / file_name
+        if node is None or not path.is_file():
+            continue
+        payload = read_json(path)
+        content_items = (payload.get("root") or [{}])[0].get("content") or []
+        children = node.get("iters") or []
+        for item in content_items:
+            if item.get("type") == "te-log-meta":
+                _update_entity_model(item.setdefault("entity_model", {}), node)
+                _update_node_meta(item.setdefault("meta", {}), node)
+            elif item.get("type") == "te-log-entity-list":
+                for index, model in enumerate(item.get("items") or []):
+                    try:
+                        child = nodes_by_id.get(int(model.get("id", "")))
+                    except (TypeError, ValueError):
+                        child = None
+                    if child is None and index < len(children):
+                        child = children[index]
+                    if child is not None:
+                        _update_entity_model(model, child)
+            elif item.get("type") == "te-log-table":
+                child_index = 0
+                for row in item.get("data") or []:
+                    timestamp = row.get("timestamp")
+                    if timestamp_delta:
+                        if isinstance(timestamp, dict) and isinstance(
+                            timestamp.get("timestamp"), (int, float)
+                        ):
+                            shifted = timestamp["timestamp"] + timestamp_delta
+                            timestamp["timestamp"] = shifted
+                            timestamp["formatted"] = datetime.fromtimestamp(
+                                shifted, tz=run_timezone
+                            ).strftime("%H:%M:%S.%f")[:-3]
+                        elif isinstance(timestamp, (int, float)):
+                            row["timestamp"] = timestamp + timestamp_delta
+
+                    text_item = _text_row_content(row)
+                    if text_item is None:
+                        continue
+                    text, value = text_item
+                    if value.startswith("Obtained result is:\n"):
+                        text["content"] = f"Obtained result is:\n{_node_status(node)}"
+                        row["level"] = _status_level(_node_status(node))
+                    elif value.startswith("RESULT status="):
+                        expected = (node.get("expected", {}).get("results") or [{}])[
+                            0
+                        ].get("status", "PASSED")
+                        replacement = (
+                            f"RESULT status={_node_status(node)} expected={expected}"
+                        )
+                        if node.get("err"):
+                            replacement += f" err={node['err']}"
+                        text["content"] = replacement
+                        row["level"] = _status_level(_node_status(node))
+                    elif (
+                        children
+                        and row.get("user_name") == "Step"
+                        and child_index < len(children)
+                    ):
+                        row["level"] = _status_level(
+                            _node_status(children[child_index])
+                        )
+                        child_index += 1
+        write_json(path, payload, pretty)
+
+
 def patch_bundle(
     output_dir: Path,
     *,
@@ -151,9 +355,16 @@ def patch_bundle(
     start_timestamp = target_start
     finish_timestamp = target_start
     roots = bublik_data.get("iters") or []
+    timestamp_delta = 0.0
     if roots:
         root = roots[0]
         original_root_start = parse_bublik_timestamp(root["start_ts"])
+        original_root_start_utc = root.get("start_ts_utc")
+        if not isinstance(original_root_start_utc, (int, float)):
+            local_timezone = datetime.now().astimezone().tzinfo or timezone.utc
+            original_root_start_utc = original_root_start.replace(
+                tzinfo=local_timezone
+            ).timestamp()
         new_root_start = start_datetime.replace(tzinfo=None)
         rebase_timestamps(
             root,
@@ -173,6 +384,7 @@ def patch_bundle(
         finish_timestamp = datetime.fromtimestamp(
             root["end_ts_utc"], tz=run_tz
         ).isoformat()
+        timestamp_delta = root["start_ts_utc"] - original_root_start_utc
     upsert_meta(meta_items, "PROJECT", spec.project)
     upsert_meta(meta_items, "RUN_STATUS", spec.metas.get("RUN_STATUS", "DONE"))
     upsert_meta(meta_items, "E2E_RUN_ID", spec.fixture_id)
@@ -194,6 +406,10 @@ def patch_bundle(
     if callable(profile_for):
         profile = profile_for(spec.conclusion, int(spec.tags.get("ordinal", "1")))
     apply_run_profile(meta_items, bublik_tags, profile)
+    if spec.conclusion == "compromised":
+        upsert_meta(meta_items, "compromised", "")
+    else:
+        meta_items[:] = [m for m in meta_items if m.get("name") != "compromised"]
     bublik_tags.update(
         {
             "fixture_id": spec.fixture_id,
@@ -208,6 +424,13 @@ def patch_bundle(
 
     write_json(meta_path, meta_data, pretty)
     write_json(bublik_path, bublik_data, pretty)
+    synchronize_json_logs(
+        output_dir,
+        bublik_data,
+        pretty,
+        timestamp_delta=timestamp_delta,
+        tz_offset=start_offset,
+    )
 
 
 def generate_bundle(
@@ -364,6 +587,12 @@ def apply_mix(
         )
 
     write_json(bublik_path, bublik, pretty)
+    start_timestamp = read_json(bundle_dir / "meta_data.json").get("metas", [])
+    start_value = get_meta_value(start_timestamp, "START_TIMESTAMP")
+    offset = (
+        datetime.fromisoformat(start_value).utcoffset() if start_value else timedelta()
+    )
+    synchronize_json_logs(bundle_dir, bublik, pretty, tz_offset=offset or timedelta())
 
 
 def spec_from_plan(plan: PlannedRun) -> FixtureSpec:
