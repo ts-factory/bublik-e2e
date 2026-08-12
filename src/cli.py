@@ -127,7 +127,8 @@ RunLogSchemaOpt = Annotated[
     Optional[Path],
     typer.Option(
         help="Draft 7 JSON Schema used to validate each finalized bublik.json. "
-        "Required unless BUBLIK_E2E_RUN_LOG_SCHEMA is set."
+        "Overrides BUBLIK_E2E_RUN_LOG_SCHEMA; otherwise derived from "
+        "BUBLIK_DJANGO_ROOT."
     ),
 ]
 MetaDataSchemaOpt = Annotated[
@@ -135,7 +136,8 @@ MetaDataSchemaOpt = Annotated[
     typer.Option(
         "--meta-data-schema",
         help="Draft 7 JSON Schema used to validate each finalized meta_data.json. "
-        "Required unless BUBLIK_E2E_META_DATA_SCHEMA is set.",
+        "Overrides BUBLIK_E2E_META_DATA_SCHEMA; otherwise derived from "
+        "BUBLIK_DJANGO_ROOT.",
     ),
 ]
 
@@ -177,7 +179,7 @@ IncludeUiOpt = Annotated[
 
 GENERATE_EPILOG = """[bold]Examples[/]
 
-[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA and BUBLIK_E2E_META_DATA_SCHEMA point to the corresponding Draft 7 schemas.[/]
+[dim]These examples assume BUBLIK_DJANGO_ROOT points to the Bublik Django repository.[/]
 
 [dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
@@ -213,7 +215,7 @@ IMPORT_EPILOG = """[bold]Examples[/]
 
 RUN_EPILOG = """[bold]Examples[/]
 
-[dim]These examples assume BUBLIK_E2E_RUN_LOG_SCHEMA and BUBLIK_E2E_META_DATA_SCHEMA point to the corresponding Draft 7 schemas.[/]
+[dim]These examples assume BUBLIK_DJANGO_ROOT points to the Bublik Django repository.[/]
 
 [dim]Per-fixture day spec (run count is derived, no --runs needed):[/]
 
@@ -238,7 +240,7 @@ def _dispatch(func: Callable[[argparse.Namespace], None], **params: object) -> N
     try:
         func(argparse.Namespace(**params))
     except CliError as exc:
-        console.print(f"[bold red]error:[/] {exc}")
+        console.print(f"[bold red]error:[/] {exc}", soft_wrap=True)
         raise typer.Exit(code=1)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import re
 
@@ -14,12 +15,17 @@ from cli import app
 runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 ONE_DAY = timedelta(days=1).total_seconds()
-REPO_ROOT = Path(__file__).resolve().parents[1]
-AUTHORITATIVE_SCHEMA_DIR = (
-    REPO_ROOT.parent / "bublik-docker" / "bublik" / "bublik" / "data" / "schemas"
+DJANGO_ROOT = os.environ.get("BUBLIK_DJANGO_ROOT")
+AUTHORITATIVE_RUN_LOG_SCHEMA = (
+    Path(DJANGO_ROOT) / "bublik" / "data" / "schemas" / "run_log.json"
+    if DJANGO_ROOT
+    else None
 )
-AUTHORITATIVE_RUN_LOG_SCHEMA = AUTHORITATIVE_SCHEMA_DIR / "run_log.json"
-AUTHORITATIVE_META_DATA_SCHEMA = AUTHORITATIVE_SCHEMA_DIR / "meta_data.json"
+AUTHORITATIVE_META_DATA_SCHEMA = (
+    Path(DJANGO_ROOT) / "bublik" / "data" / "schemas" / "meta_data.json"
+    if DJANGO_ROOT
+    else None
+)
 
 
 def visible_output(output: str) -> str:
@@ -37,6 +43,19 @@ def write_permissive_schema(tmp_path: Path) -> Path:
         )
     )
     return schema_path
+
+
+def write_bublik_schemas(django_root: Path) -> None:
+    schema_dir = django_root / "bublik" / "data" / "schemas"
+    schema_dir.mkdir(parents=True)
+    schema_text = json.dumps(
+        {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+        }
+    )
+    (schema_dir / "run_log.json").write_text(schema_text)
+    (schema_dir / "meta_data.json").write_text(schema_text)
 
 
 def test_root_help_lists_commands() -> None:
@@ -58,6 +77,7 @@ def test_generate_help_succeeds() -> None:
     assert "--day" in output
     assert "--run-log-schema" in output
     assert "--meta-data-schema" in output
+    assert "BUBLIK_DJANGO_ROOT" in output
 
 
 def test_generation_schema_options_are_not_available_on_import() -> None:
@@ -99,6 +119,7 @@ def test_generate_requires_run_log_schema_before_deleting_output(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.delenv("BUBLIK_E2E_RUN_LOG_SCHEMA", raising=False)
+    monkeypatch.delenv("BUBLIK_DJANGO_ROOT", raising=False)
     publish_dir = tmp_path / "publish"
     publish_dir.mkdir()
     marker = publish_dir / "keep.txt"
@@ -116,6 +137,7 @@ def test_generate_requires_meta_data_schema_before_deleting_output(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.delenv("BUBLIK_E2E_META_DATA_SCHEMA", raising=False)
+    monkeypatch.delenv("BUBLIK_DJANGO_ROOT", raising=False)
     schema_path = write_permissive_schema(tmp_path)
     publish_dir = tmp_path / "publish"
     publish_dir.mkdir()
@@ -136,6 +158,55 @@ def test_generate_requires_meta_data_schema_before_deleting_output(
     assert result.exit_code == 1
     assert "no meta-data schema" in visible_output(result.output)
     assert "--meta-data-schema" in visible_output(result.output)
+    assert marker.read_text() == "keep"
+
+
+def test_generate_uses_schemas_from_bublik_django_root(tmp_path, monkeypatch) -> None:
+    django_root = tmp_path / "bublik-checkout"
+    write_bublik_schemas(django_root)
+    monkeypatch.delenv("BUBLIK_E2E_RUN_LOG_SCHEMA", raising=False)
+    monkeypatch.delenv("BUBLIK_E2E_META_DATA_SCHEMA", raising=False)
+    monkeypatch.setenv("BUBLIK_DJANGO_ROOT", str(django_root))
+    publish_dir = tmp_path / "publish"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--runs",
+            "1",
+            "--fill",
+            "ok",
+            "--dates",
+            "2026-04-25",
+            "--publish-dir",
+            str(publish_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, visible_output(result.output)
+    assert len(list(publish_dir.glob("*/bublik.json"))) == 1
+
+
+def test_generate_rejects_missing_schema_from_bublik_django_root_before_deleting_output(
+    tmp_path, monkeypatch
+) -> None:
+    django_root = tmp_path / "bublik-checkout"
+    monkeypatch.delenv("BUBLIK_E2E_RUN_LOG_SCHEMA", raising=False)
+    monkeypatch.delenv("BUBLIK_E2E_META_DATA_SCHEMA", raising=False)
+    monkeypatch.setenv("BUBLIK_DJANGO_ROOT", str(django_root))
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    marker = publish_dir / "keep.txt"
+    marker.write_text("keep")
+
+    result = runner.invoke(app, ["generate", "--publish-dir", str(publish_dir)])
+
+    expected_path = django_root / "bublik" / "data" / "schemas" / "run_log.json"
+    output = visible_output(result.output)
+    assert result.exit_code == 1
+    assert "cannot read run-log schema" in output
+    assert str(expected_path.resolve()) in output
     assert marker.read_text() == "keep"
 
 
@@ -483,7 +554,9 @@ def test_generated_bundles_satisfy_timestamp_invariants(tmp_path) -> None:
 
 
 @pytest.mark.skipif(
-    not AUTHORITATIVE_RUN_LOG_SCHEMA.is_file()
+    AUTHORITATIVE_RUN_LOG_SCHEMA is None
+    or AUTHORITATIVE_META_DATA_SCHEMA is None
+    or not AUTHORITATIVE_RUN_LOG_SCHEMA.is_file()
     or not AUTHORITATIVE_META_DATA_SCHEMA.is_file(),
     reason="authoritative Bublik schemas checkout is unavailable",
 )

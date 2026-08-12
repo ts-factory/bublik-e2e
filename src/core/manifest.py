@@ -260,13 +260,13 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
     if run_log_schema_path is None:
         raise CliError(
             "no run-log schema: pass --run-log-schema <path> "
-            "(or set BUBLIK_E2E_RUN_LOG_SCHEMA)"
+            "(or set BUBLIK_E2E_RUN_LOG_SCHEMA or BUBLIK_DJANGO_ROOT)"
         )
     meta_data_schema_path = settings.meta_data_schema
     if meta_data_schema_path is None:
         raise CliError(
             "no meta-data schema: pass --meta-data-schema <path> "
-            "(or set BUBLIK_E2E_META_DATA_SCHEMA)"
+            "(or set BUBLIK_E2E_META_DATA_SCHEMA or BUBLIK_DJANGO_ROOT)"
         )
     run_log_validator = load_run_log_validator(run_log_schema_path)
     meta_data_validator = load_meta_data_validator(meta_data_schema_path)

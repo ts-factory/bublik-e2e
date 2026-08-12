@@ -1,16 +1,16 @@
 """Settings derived from CLI flags and environment variables.
 
-Configuration is instance-agnostic: there is no bublik-docker project-root
-discovery and no automatic ``.env`` reading. Values come from CLI flag overrides
-first, then real environment variables (optionally seeded from an explicit
-``--env-file``). The recognised env-var names are the existing bublik-docker
+Configuration is instance-agnostic: there is no automatic project-root discovery
+and no automatic ``.env`` reading. Values come from CLI flag overrides first,
+then real environment variables (optionally seeded from an explicit
+``--env-file``). The recognised env-var names include the existing bublik-docker
 ones (``BUBLIK_FQDN``, ``BUBLIK_DOCKER_PROXY_PORT``, ``URL_PREFIX``,
 ``DJANGO_SUPERUSER_EMAIL``, ``DJANGO_SUPERUSER_PASSWORD``) so a docker ``.env``
 carries over unchanged. The publish directory is an explicit full path
 (``--publish-dir`` / ``BUBLIK_E2E_PUBLISH_DIR``); nothing is assumed about its
 layout.
-The run-log and metadata schemas are likewise explicit and mandatory for commands
-that generate bundles.
+The run-log and metadata schemas may be explicit or derived from the Bublik
+Django repository root specified by ``BUBLIK_DJANGO_ROOT``.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from pathlib import Path
 DEFAULT_TIMEZONE = timezone(timedelta(hours=3))
 DEFAULT_EMAIL = "admin@bublik.com"
 DEFAULT_PASSWORD = "admin"
+BUBLIK_SCHEMA_DIR = Path("bublik/data/schemas")
 
 
 def default_manifest() -> Path:
@@ -125,7 +126,12 @@ class Settings:
             env = self.get("BUBLIK_E2E_RUN_LOG_SCHEMA")
             raw = Path(env) if env else None
         if raw is None:
-            return None
+            django_root = self.bublik_django_root
+            return (
+                django_root / BUBLIK_SCHEMA_DIR / "run_log.json"
+                if django_root
+                else None
+            )
         path = Path(raw)
         return path if path.is_absolute() else Path.cwd() / path
 
@@ -136,6 +142,19 @@ class Settings:
             env = self.get("BUBLIK_E2E_META_DATA_SCHEMA")
             raw = Path(env) if env else None
         if raw is None:
+            django_root = self.bublik_django_root
+            return (
+                django_root / BUBLIK_SCHEMA_DIR / "meta_data.json"
+                if django_root
+                else None
+            )
+        path = Path(raw)
+        return path if path.is_absolute() else Path.cwd() / path
+
+    @property
+    def bublik_django_root(self) -> Path | None:
+        raw = self.get("BUBLIK_DJANGO_ROOT")
+        if not raw:
             return None
         path = Path(raw)
         return path if path.is_absolute() else Path.cwd() / path

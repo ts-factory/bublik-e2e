@@ -88,6 +88,50 @@ def test_run_log_schema_uses_env_file_value(monkeypatch, tmp_path: Path) -> None
     assert settings.run_log_schema == tmp_path / "schemas" / "run-log.json"
 
 
+def test_schema_paths_are_derived_from_bublik_django_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BUBLIK_E2E_RUN_LOG_SCHEMA", raising=False)
+    monkeypatch.delenv("BUBLIK_E2E_META_DATA_SCHEMA", raising=False)
+    monkeypatch.setenv("BUBLIK_DJANGO_ROOT", "bublik-checkout")
+
+    settings = Settings.from_args(make_args())
+
+    schema_dir = tmp_path / "bublik-checkout" / "bublik" / "data" / "schemas"
+    assert settings.run_log_schema == schema_dir / "run_log.json"
+    assert settings.meta_data_schema == schema_dir / "meta_data.json"
+
+
+def test_bublik_django_root_uses_env_file_value(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BUBLIK_DJANGO_ROOT", raising=False)
+    monkeypatch.delenv("BUBLIK_E2E_RUN_LOG_SCHEMA", raising=False)
+    monkeypatch.delenv("BUBLIK_E2E_META_DATA_SCHEMA", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("BUBLIK_DJANGO_ROOT=bublik-checkout\n")
+
+    settings = Settings.from_args(make_args(env_file=env_file))
+
+    schema_dir = tmp_path / "bublik-checkout" / "bublik" / "data" / "schemas"
+    assert settings.run_log_schema == schema_dir / "run_log.json"
+    assert settings.meta_data_schema == schema_dir / "meta_data.json"
+
+
+def test_direct_schema_environment_overrides_bublik_django_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BUBLIK_DJANGO_ROOT", "bublik-checkout")
+    monkeypatch.setenv("BUBLIK_E2E_RUN_LOG_SCHEMA", "schemas/run-log.json")
+    monkeypatch.setenv("BUBLIK_E2E_META_DATA_SCHEMA", "schemas/meta-data.json")
+
+    settings = Settings.from_args(make_args())
+
+    assert settings.run_log_schema == tmp_path / "schemas" / "run-log.json"
+    assert settings.meta_data_schema == tmp_path / "schemas" / "meta-data.json"
+
+
 def test_run_log_schema_cli_overrides_environment(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BUBLIK_E2E_RUN_LOG_SCHEMA", "env-schema.json")
