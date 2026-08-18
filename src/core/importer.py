@@ -379,6 +379,72 @@ def login(base_url: str, settings: Settings, cookie_jar: Path) -> None:
     )
 
 
+def upsert_config(
+    base_url: str,
+    cookie_jar: Path,
+    existing_configs: list[dict[str, Any]],
+    *,
+    config_type: str,
+    name: str,
+    description: str,
+    content: Any,
+    project_id: int | None,
+) -> None:
+    """
+    Create a global config, or add a version to it when it already exists.
+
+    Bublik enforces a unique (type, name, project) triple, so a POST for an
+    already-configured stack is rejected with HTTP 400. PATCHing the active
+    version instead creates a new version whenever the content differs and
+    activates it, which keeps --setup-projects idempotent and lets changes to
+    the payloads below reach a stack that was seeded by an earlier release.
+    """
+    existing = next(
+        (
+            config
+            for config in existing_configs
+            if config["type"] == config_type
+            and config["name"] == name
+            and config["project"] == project_id
+        ),
+        None,
+    )
+    if existing is not None:
+        curl_json(
+            f"{base_url}/api/v2/config/{existing['id']}/",
+            method="PATCH",
+            payload={
+                "description": description,
+                "is_active": True,
+                "content": content,
+            },
+            cookie_jar=cookie_jar,
+        )
+        return
+
+    created = curl_json(
+        f"{base_url}/api/v2/config/",
+        method="POST",
+        payload={
+            "type": config_type,
+            "name": name,
+            "description": description,
+            "is_active": True,
+            "content": content,
+            "project": project_id,
+        },
+        cookie_jar=cookie_jar,
+    )
+    existing_configs.append(
+        {
+            "id": created["id"],
+            "type": config_type,
+            "name": name,
+            "project": project_id,
+        }
+    )
+
+
 def ensure_api_projects(
     manifest: dict[str, Any], base_url: str, cookie_jar: Path
 ) -> None:
@@ -389,6 +455,12 @@ def ensure_api_projects(
     for config in manifest.get("configs", []):
         configs_by_project.setdefault(config["project"], []).append(config)
     references = {
+        "ISSUES": {
+            "E2E_BUGS": {
+                "uri": "https://bugs.example.invalid/issue/",
+                "name": "E2E Bug Tracker",
+            }
+        },
         "REVISIONS": {
             "TE_REV": {
                 "uri": "https://github.com/ts-factory/test-environment",
@@ -488,6 +560,8 @@ def ensure_api_projects(
         "NOT_PERMISSION_REQUIRED_ACTIONS": [],
     }
 
+    existing_configs = curl_json(f"{base_url}/api/v2/config/", cookie_jar=cookie_jar)
+
     for project_name in project_names:
         project = projects_by_name.get(project_name)
         if project is None:
@@ -499,89 +573,64 @@ def ensure_api_projects(
             )
             projects_by_name[project_name] = project
 
-        curl_json(
-            f"{base_url}/api/v2/config/",
-            method="POST",
-            payload={
-                "type": "global",
-                "name": "references",
-                "description": "E2E fixture logs references",
-                "is_active": True,
-                "content": references,
-                "project": project["id"],
-            },
-            cookie_jar=cookie_jar,
+        upsert_config(
+            base_url,
+            cookie_jar,
+            existing_configs,
+            config_type="global",
+            name="references",
+            description="E2E fixture logs references",
+            content=references,
+            project_id=project["id"],
         )
 
-        curl_json(
-            f"{base_url}/api/v2/config/",
-            method="POST",
-            payload={
-                "type": "global",
-                "name": "meta",
-                "description": "Meta categorization configuration",
-                "is_active": True,
-                "content": meta,
-                "project": project["id"],
-            },
-            cookie_jar=cookie_jar,
+        upsert_config(
+            base_url,
+            cookie_jar,
+            existing_configs,
+            config_type="global",
+            name="meta",
+            description="Meta categorization configuration",
+            content=meta,
+            project_id=project["id"],
         )
 
-        curl_json(
-            f"{base_url}/api/v2/config/",
-            method="POST",
-            payload={
-                "type": "global",
-                "name": "per_conf",
-                "description": "Main project configuration",
-                "is_active": True,
-                "content": per_conf,
-                "project": project["id"],
-            },
-            cookie_jar=cookie_jar,
+        upsert_config(
+            base_url,
+            cookie_jar,
+            existing_configs,
+            config_type="global",
+            name="per_conf",
+            description="Main project configuration",
+            content=per_conf,
+            project_id=project["id"],
         )
 
         for config in configs_by_project.get(project_name, []):
-            curl_json(
-                f"{base_url}/api/v2/config/",
-                method="POST",
-                payload={
-                    "type": config["type"],
-                    "name": config["name"],
-                    "description": config.get("description", ""),
-                    "is_active": True,
-                    "content": config["content"],
-                    "project": project["id"],
-                },
-                cookie_jar=cookie_jar,
+            upsert_config(
+                base_url,
+                cookie_jar,
+                existing_configs,
+                config_type=config["type"],
+                name=config["name"],
+                description=config.get("description", ""),
+                content=config["content"],
+                project_id=project["id"],
             )
 
     # Bring the default (project=None) per_conf in line with the per-project
-    # ones. It already exists from Bublik init, so a POST would be rejected by
-    # the unique (type, name, project) check; PATCH the active version instead,
-    # which creates a new version when the content differs and activates it.
-    existing_configs = curl_json(f"{base_url}/api/v2/config/", cookie_jar=cookie_jar)
-    default_per_conf = next(
-        (
-            config
-            for config in existing_configs
-            if config["type"] == "global"
-            and config["name"] == "per_conf"
-            and config["project"] is None
-        ),
-        None,
+    # ones. It already exists from Bublik init, so this always takes the PATCH
+    # path above.
+    upsert_config(
+        base_url,
+        cookie_jar,
+        existing_configs,
+        config_type="global",
+        name="per_conf",
+        description="Main project configuration",
+        content=per_conf,
+        project_id=None,
     )
-    if default_per_conf is not None:
-        curl_json(
-            f"{base_url}/api/v2/config/{default_per_conf['id']}/",
-            method="PATCH",
-            payload={
-                "description": "Main project configuration",
-                "is_active": True,
-                "content": per_conf,
-            },
-            cookie_jar=cookie_jar,
-        )
 
 
 def import_via_api(
