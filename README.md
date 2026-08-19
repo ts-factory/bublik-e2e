@@ -61,6 +61,7 @@ uv run pytest
 | `generate` | Generate bundles into `--publish-dir`, write the manifest. **No import.** | No |
 | `import` | Read an existing manifest, log in, optionally set up projects, import, show live progress. | Yes |
 | `run` | `generate` then `import` in one shot. | Yes |
+| `plan` | Expand a plan file and print what it would generate. **Writes nothing.** | No |
 
 ### Configuration
 
@@ -139,6 +140,55 @@ prefix it with a fixture name (`basic.ok=1`) to scope it. Pass `--runs` only in
 `--fill` mode, or with `--day` as an optional assertion that the derived count
 matches.
 
+### Plan files
+
+A campaign that outgrows one command line belongs in a plan file — a versioned,
+reviewable, commentable YAML rendering of the same `--runs`/`--mix`/`--day`
+values:
+
+```yaml
+version: 1
+runs: 3
+
+mixes:
+  # Values are shares of the run ("20%") or absolute counts (1).
+  warn:
+    unexpectedFailed: 20%
+    expectedKilled: 1
+
+days:
+  2026-04-19: []          # a planned empty day
+  2026-04-20:
+    - basic.ok=1
+    - net-drv-ts.nok-warning@warn=1
+    - basic.ok+ui=1       # imported through the UI, not the API
+```
+
+```bash
+bublik-e2e plan --plan e2e/plan.yaml            # validate and summarize
+bublik-e2e run  --plan e2e/plan.yaml --setup-projects
+```
+
+`--plan` is mutually exclusive with `--day`/`--fill`; an explicit `--runs` or an
+extra `--mix` on the command line still wins, so a plan can be tweaked without
+editing the file. Days and mixes each accept the compact string form too
+(`2026-04-20: "basic.ok=1,basic.warning=1"`), and because JSON is valid YAML a
+`.json` plan loads unchanged.
+
+`bublik-e2e plan` expands the campaign and prints what it would generate —
+grouped by `--by date` (default), `fixture` or `conclusion` — without writing
+anything:
+
+```
+39 runs, 5 dates with runs, 1 empty, 2 imported through the UI
+```
+
+The file's shape is validated against a JSON Schema generated from
+`core/plan_models.py`; export it for editor completion or CI with
+`bublik-e2e schema --kind plan`. Everything inside a spec string (mix keys,
+conclusions, fixture names, counts) is validated by the same parser the
+command-line options use, so the two paths cannot drift.
+
 Import an existing manifest through the API:
 
 ```bash
@@ -197,6 +247,7 @@ bublik-e2e schema --out schema.json
 | `core/settings.py` | flag/env-derived settings and URL helpers |
 | `core/discovery.py` | entry-point fixture discovery and `--fixture` loading |
 | `core/planning.py` | mix/day/fill parsing and run planning |
+| `core/plan_file.py` / `core/plan_models.py` | plan-file loading and its schema |
 | `core/bundle.py` | bundle generation, metadata, and result mixes |
 | `core/manifest.py` | manifest assembly and expectation extraction |
 | `core/importer.py` | API import path and live progress table |

@@ -14,6 +14,7 @@ dependencies = [
     "rich>=13",
     "pydantic>=2.13.4",
     "jsonschema>=4.23",
+    "pyyaml>=6",
 ]
 
 [dependency-groups]

@@ -17,11 +17,16 @@ from pathlib import Path
 from typing import Annotated, Callable, List, Optional
 
 import typer
+from rich.table import Table
 
 from core.common import CliError, console
+from core.discovery import selected_fixtures
 from core.importer import generate_and_import, import_manifest
 from core.manifest import generate_manifest
 from core.manifest_models import manifest_json_schema
+from core.plan_models import plan_json_schema
+from core.plan_file import load_plan_file
+from core.planning import build_mixes, build_plan
 
 app = typer.Typer(
     rich_markup_mode="rich",
@@ -99,6 +104,17 @@ DatesOpt = Annotated[
     typer.Option(
         metavar="YYYY-MM-DD[..YYYY-MM-DD]",
         help="Single date or inclusive range used by --fill.",
+    ),
+]
+PlanOpt = Annotated[
+    Optional[Path],
+    typer.Option(
+        metavar="FILE",
+        help="JSON plan file holding the campaign: "
+        '{"version": 1, "runs": N, "mixes": {...}, "days": {...}}. Equivalent to '
+        "the matching --runs/--mix/--day options, and validated the same way. "
+        "Day and mix specs may be one string or a list of strings. Mutually "
+        "exclusive with --day/--fill; extra --mix options are merged in.",
     ),
 ]
 MixOpt = Annotated[
@@ -244,10 +260,35 @@ def _dispatch(func: Callable[[argparse.Namespace], None], **params: object) -> N
         raise typer.Exit(code=1)
 
 
+def _plan_or_exit(
+    plan: Optional[Path],
+    runs: Optional[int],
+    day: Optional[List[str]],
+    fill: Optional[str],
+    mix: Optional[List[str]],
+) -> tuple[Optional[int], List[str], List[str]]:
+    """Fold a --plan file into the (runs, day, mix) triple the core expects."""
+    if plan is None:
+        return runs, day or [], mix or []
+    try:
+        if day:
+            raise CliError("--plan and --day are mutually exclusive")
+        if fill:
+            raise CliError("--plan and --fill are mutually exclusive")
+        plan_runs, plan_mix, plan_day = load_plan_file(plan)
+    except CliError as exc:
+        console.print(f"[bold red]error:[/] {exc}", soft_wrap=True)
+        raise typer.Exit(code=1)
+    # An explicit --runs still wins, so a plan can be spot-checked from the CLI;
+    # extra --mix definitions are additive and may override a plan's mix.
+    return (runs if runs is not None else plan_runs, plan_day, plan_mix + (mix or []))
+
+
 @app.command(epilog=GENERATE_EPILOG)
 def generate(
     runs: RunsOpt = None,
     fixture: FixtureOpt = None,
+    plan: PlanOpt = None,
     day: DayOpt = None,
     fill: FillOpt = None,
     dates: DatesOpt = None,
@@ -261,6 +302,7 @@ def generate(
     manifest: ManifestOpt = None,
 ) -> None:
     """Generate bundles into --publish-dir and write the manifest. No import."""
+    runs, day, mix = _plan_or_exit(plan, runs, day, fill, mix)
     _dispatch(
         generate_manifest,
         url=url,
@@ -268,10 +310,10 @@ def generate(
         manifest=manifest,
         fixture=fixture or [],
         runs=runs,
-        day=day or [],
+        day=day,
         fill=fill,
         dates=dates,
-        mix=mix or [],
+        mix=mix,
         publish_dir=publish_dir,
         pretty=pretty,
         run_log_schema=run_log_schema,
@@ -308,6 +350,7 @@ def import_(
 def run(
     runs: RunsOpt = None,
     fixture: FixtureOpt = None,
+    plan: PlanOpt = None,
     day: DayOpt = None,
     fill: FillOpt = None,
     dates: DatesOpt = None,
@@ -326,6 +369,7 @@ def run(
     include_ui: IncludeUiOpt = False,
 ) -> None:
     """Generate bundles and import them in one shot (generate + import)."""
+    runs, day, mix = _plan_or_exit(plan, runs, day, fill, mix)
     _dispatch(
         generate_and_import,
         url=url,
@@ -333,10 +377,10 @@ def run(
         manifest=manifest,
         fixture=fixture or [],
         runs=runs,
-        day=day or [],
+        day=day,
         fill=fill,
         dates=dates,
-        mix=mix or [],
+        mix=mix,
         publish_dir=publish_dir,
         pretty=pretty,
         run_log_schema=run_log_schema,
@@ -349,15 +393,94 @@ def run(
     )
 
 
+PLAN_EPILOG = """[bold]Examples[/]
+
+[dim]Validate the versioned campaign and see what it expands to:[/]
+
+[cyan]bublik-e2e plan --plan e2e/plan.json[/]
+
+[dim]Break the summary down by fixture instead of by date:[/]
+
+[cyan]bublik-e2e plan --plan e2e/plan.json --by fixture[/]
+"""
+
+
+@app.command(epilog=PLAN_EPILOG)
+def plan(
+    plan: PlanOpt = None,
+    fixture: FixtureOpt = None,
+    day: DayOpt = None,
+    mix: MixOpt = None,
+    runs: RunsOpt = None,
+    by: Annotated[
+        str,
+        typer.Option(help="Group the summary by 'date', 'fixture' or 'conclusion'."),
+    ] = "date",
+) -> None:
+    """Expand a plan and print what it would generate. Nothing is written."""
+    groups = {"date", "fixture", "conclusion"}
+    if by not in groups:
+        console.print(
+            f"[bold red]error:[/] --by must be one of: {', '.join(sorted(groups))}"
+        )
+        raise typer.Exit(code=1)
+    runs, day, mix = _plan_or_exit(plan, runs, day, None, mix)
+    try:
+        args = argparse.Namespace(
+            fixture=fixture or [], runs=runs, day=day, fill=None, dates=None, mix=mix
+        )
+        fixtures = selected_fixtures(args)
+        mixes = build_mixes(args)
+        planned, empty_dates = build_plan(args, fixtures, mixes)
+    except CliError as exc:
+        console.print(f"[bold red]error:[/] {exc}", soft_wrap=True)
+        raise typer.Exit(code=1)
+
+    key = {
+        "date": lambda run: run.run_date,
+        "fixture": lambda run: run.fixture.name,
+        "conclusion": lambda run: run.conclusion,
+    }[by]
+    table = Table(title=f"{len(planned)} runs by {by}", title_justify="left")
+    table.add_column(by.capitalize())
+    table.add_column("Runs", justify="right")
+    table.add_column("Via UI", justify="right")
+    for value in sorted({key(run) for run in planned}):
+        rows = [run for run in planned if key(run) == value]
+        via_ui = sum(1 for run in rows if run.import_via == "ui")
+        table.add_row(value, str(len(rows)), str(via_ui) if via_ui else "-")
+    console.print(table)
+    console.print(
+        f"{len(planned)} runs, "
+        f"{len({run.run_date for run in planned})} dates with runs, "
+        f"{len(empty_dates)} empty, "
+        f"{sum(1 for run in planned if run.import_via == 'ui')} imported through the UI"
+    )
+
+
 @app.command()
 def schema(
     out: Annotated[
         Optional[Path],
         typer.Option(help="Write the schema to this file instead of stdout."),
     ] = None,
+    kind: Annotated[
+        str,
+        typer.Option(
+            help="Which schema to print: 'manifest' (default, drives the UI's "
+            "TypeScript codegen) or 'plan' (drives editor completion and "
+            "validation of plan.yaml)."
+        ),
+    ] = "manifest",
 ) -> None:
-    """Print the manifest JSON Schema (for downstream TypeScript codegen)."""
-    rendered = json.dumps(manifest_json_schema(), indent=2, sort_keys=True) + "\n"
+    """Print a JSON Schema (manifest by default; --kind plan for plan files)."""
+    builders = {"manifest": manifest_json_schema, "plan": plan_json_schema}
+    if kind not in builders:
+        console.print(
+            f"[bold red]error:[/] --kind must be one of: {', '.join(sorted(builders))}"
+        )
+        raise typer.Exit(code=1)
+    rendered = json.dumps(builders[kind](), indent=2, sort_keys=True) + "\n"
     if out is None:
         print(rendered, end="")
         return

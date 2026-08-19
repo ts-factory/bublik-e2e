@@ -33,9 +33,20 @@ def default_manifest() -> Path:
 
 
 def resolve_manifest(args: argparse.Namespace) -> Path:
-    """The ``--manifest`` path if given, else the default."""
+    """``--manifest``, else ``BUBLIK_E2E_MANIFEST``, else the default.
+
+    The env fallback matches ``BUBLIK_E2E_PUBLISH_DIR`` and the schema variables,
+    so a caller can export the whole path set once instead of repeating flags.
+    """
     explicit = getattr(args, "manifest", None)
-    return explicit if explicit is not None else default_manifest()
+    if explicit is not None:
+        return Path(explicit)
+    settings = Settings.from_args(args)
+    env_value = settings.get("BUBLIK_E2E_MANIFEST")
+    if not env_value:
+        return default_manifest()
+    path = Path(env_value)
+    return path if path.is_absolute() else Path.cwd() / path
 
 
 def _parse_env_file(env_file: Path) -> dict[str, str]:
