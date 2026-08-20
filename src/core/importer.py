@@ -201,24 +201,31 @@ def find_existing_run_id(
     returns the first successfully completed task that produced a run id. Used to
     reconcile the manifest against the database before scheduling: already-imported
     bundles are skipped, and stale or failed ``runId`` values are cleared.
+
+    The endpoint filters ``run_source_url`` by exact string match, and Bublik
+    records the URL with a trailing slash while the manifest's ``importUrl`` has
+    none. Asking with only one spelling answers 404 and every bundle then looks
+    unimported, so both are tried; the results are still matched on the
+    normalized URL, which is what decides the answer.
     """
-    query = urllib.parse.urlencode({"url": import_url, "page_size": 10000})
-    try:
-        payload = curl_json(
-            f"{base_url}/api/v2/session_import/?{query}", cookie_jar=cookie_jar
-        )
-    except CliError:
-        return None
-    results = payload.get("results", []) if isinstance(payload, dict) else []
     expected = normalize_url(import_url)
-    for task in results:
-        if normalize_url(str(task.get("run_source_url", ""))) != expected:
+    for candidate in (expected, f"{expected}/"):
+        query = urllib.parse.urlencode({"url": candidate, "page_size": 10000})
+        try:
+            payload = curl_json(
+                f"{base_url}/api/v2/session_import/?{query}", cookie_jar=cookie_jar
+            )
+        except CliError:
             continue
-        if str(task.get("status", "")).upper() != "SUCCESS":
-            continue
-        run_id = task.get("run_id")
-        if isinstance(run_id, int) and run_id > 0:
-            return run_id
+        results = payload.get("results", []) if isinstance(payload, dict) else []
+        for task in results:
+            if normalize_url(str(task.get("run_source_url", ""))) != expected:
+                continue
+            if str(task.get("status", "")).upper() != "SUCCESS":
+                continue
+            run_id = task.get("run_id")
+            if isinstance(run_id, int) and run_id > 0:
+                return run_id
     return None
 
 
