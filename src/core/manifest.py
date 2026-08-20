@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import re
 from typing import Any
 import urllib.parse
 import uuid
@@ -25,6 +26,7 @@ from core.common import CliError, console, read_json, write_json
 from core.constants import (
     ABNORMAL_STATUSES,
     EXPECTED_CONCLUSION,
+    LOG_PAGES_MIN_ROWS,
     MATRIX_KEYS,
     NOK_BORDERS,
     RUN_STATUS_BY_CONCLUSION,
@@ -223,6 +225,87 @@ def collect_packages(bundle_dir: Path) -> list[dict[str, Any]]:
     return packages
 
 
+#: The page-one file of a node. Pages above one add ``_p<N>``; the whole log
+#: combined is ``_all``. Both are found from this file's name, not matched here.
+LOG_NODE_FILE_RE = re.compile(r"node_id(\d+)\.json")
+
+
+def _table_row_count(payload: dict[str, Any]) -> int:
+    block = (payload.get("root") or [{}])[0]
+    return sum(
+        len(item.get("data") or [])
+        for item in block.get("content") or []
+        if item.get("type") == "te-log-table"
+    )
+
+
+def collect_log_pages(bundle_dir: Path) -> list[dict[str, Any]]:
+    """Describe the leaves whose logs a test could usefully page or scroll.
+
+    Read back off the published files rather than predicted from the fixture:
+    how a log is split is decided when it is written, and a provider that starts
+    or stops paginating is picked up here without touching this code.
+    """
+    json_dir = bundle_dir / "json"
+    if not json_dir.is_dir():
+        return []
+
+    bublik = read_json(bundle_dir / "bublik.json")
+    roots = bublik.get("iters") or []
+    if not roots:
+        return []
+
+    leaves: dict[int, dict[str, Any]] = {}
+
+    def collect(node: dict[str, Any]) -> None:
+        children = node.get("iters") or []
+        if node.get("type") == "test" and not children:
+            leaves[node["test_id"]] = node
+        for child in children:
+            collect(child)
+
+    collect(roots[0])
+
+    # One directory listing: a synthetic bundle has thousands of nodes and must
+    # not cost a stat call each.
+    names = {entry.name for entry in os.scandir(json_dir)}
+    entries: list[dict[str, Any]] = []
+    for name in sorted(names):
+        match = LOG_NODE_FILE_RE.fullmatch(name)
+        if not match:
+            continue
+        node = leaves.get(int(match.group(1)))
+        if node is None:
+            continue
+
+        page_one = read_json(json_dir / name)
+        block = (page_one.get("root") or [{}])[0]
+        pages_count = int((block.get("pagination") or {}).get("pages_count") or 0) or 1
+        if pages_count > 1:
+            # The all-pages file reports zeros, so the row total comes from it
+            # while the page count comes from page one.
+            row_count = _table_row_count(
+                read_json(json_dir / f"node_id{match.group(1)}_all.json")
+            )
+        else:
+            row_count = _table_row_count(page_one)
+            if row_count < LOG_PAGES_MIN_ROWS:
+                continue
+
+        entries.append(
+            {
+                "name": node.get("name"),
+                "path": node.get("path", []),
+                "pathStr": node.get("path_str", ""),
+                "tin": node.get("tin"),
+                "pagesCount": pages_count,
+                "rowCount": row_count,
+            }
+        )
+
+    return sorted(entries, key=lambda entry: (entry["pathStr"], entry["tin"] or 0))
+
+
 def summarize_measurements(iterations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     for leaf in iterations:
@@ -357,6 +440,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
             )
             measurements = summarize_measurements(iterations)
             packages = collect_packages(bundle_output_dir)
+            log_pages = collect_log_pages(bundle_output_dir)
 
             bundles.append(
                 {
@@ -395,6 +479,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
                             "verdicts": verdicts,
                             "measurements": measurements,
                             "packages": packages,
+                            "logPages": log_pages,
                             "sampleTests": sample_tests_from_matrix(matrix),
                         }
                     ],

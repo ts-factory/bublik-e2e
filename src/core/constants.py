@@ -56,6 +56,11 @@ EXPECTED_CONCLUSION = {
     "compromised": "run-compromised",
 }
 NOK_BORDERS = (20, 80)
+# How many table rows make a single-page log worth recording in the manifest.
+# Every fixture leaf has a log; only one long enough to need scrolling is worth
+# pointing a test at. Mirrored by LONG_LOG_ROWS in the e2e suite's
+# support/capabilities.ts.
+LOG_PAGES_MIN_ROWS = 200
 
 # File Bublik fetches at the run URL to decide a run is complete (RUN_COMPLETE_FILE,
 # schema default in bublik per_conf.json). Its presence makes the importer store

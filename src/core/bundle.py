@@ -243,7 +243,10 @@ def synchronize_json_logs(
     def node_for_file(file_name: str) -> dict[str, Any] | None:
         if file_name == main_package or file_name == "node_1_0.json":
             return root
-        match = re.fullmatch(r"node_id(\d+)\.json", file_name)
+        # A paginating node publishes node_id<N>.json (page one), node_id<N>_p<K>
+        # for the pages above it, and node_id<N>_all.json. All of them describe
+        # the same node and all of them need the same finalized data.
+        match = re.fullmatch(r"node_id(\d+)(?:_p\d+|_all)?\.json", file_name)
         return nodes_by_id.get(int(match.group(1))) if match else None
 
     tree = tree_data.get("tree", {})
@@ -266,6 +269,9 @@ def synchronize_json_logs(
     files = set(tree)
     if (json_dir / "node_id1.json").is_file():
         files.add("node_id1.json")
+    # tree.json lists page-one files only; the rest have to be discovered.
+    files.update(path.name for path in json_dir.glob("node_id*_p*.json"))
+    files.update(path.name for path in json_dir.glob("node_id*_all.json"))
     run_timezone = timezone(tz_offset)
     for file_name in files:
         node = node_for_file(file_name)
@@ -290,7 +296,6 @@ def synchronize_json_logs(
                     if child is not None:
                         _update_entity_model(model, child)
             elif item.get("type") == "te-log-table":
-                child_index = 0
                 for row in item.get("data") or []:
                     timestamp = row.get("timestamp")
                     if timestamp_delta:
@@ -323,15 +328,17 @@ def synchronize_json_logs(
                             replacement += f" err={node['err']}"
                         text["content"] = replacement
                         row["level"] = _status_level(_node_status(node))
-                    elif (
-                        children
-                        and row.get("user_name") == "Step"
-                        and child_index < len(children)
-                    ):
-                        row["level"] = _status_level(
-                            _node_status(children[child_index])
-                        )
-                        child_index += 1
+                    elif children and row.get("user_name") == "Step":
+                        # A node with children emits exactly one row per child,
+                        # numbered from one. Deriving the child from the row's
+                        # own line number rather than from a running counter
+                        # keeps this correct when the rows are split across
+                        # pages, where each file starts part-way through.
+                        child_index = int(row.get("line_number", 0)) - 1
+                        if 0 <= child_index < len(children):
+                            row["level"] = _status_level(
+                                _node_status(children[child_index])
+                            )
         write_json(path, payload, pretty)
 
 

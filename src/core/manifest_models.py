@@ -144,6 +144,34 @@ class IterationEntry(_Model):
     measurements: list[Any]
 
 
+class LogPagesEntry(_Model):
+    """A leaf whose published log is worth navigating.
+
+    Either the log is split across several JSON page files, or it is a single
+    file long enough that a line near its end is off screen on load. Shorter
+    leaves are omitted: every fixture leaf has a log, and listing them all would
+    bury the two or three a test can actually use.
+
+    How many pages a log has is a property of how it was *published*, not of its
+    row count -- rgt cuts pages on raw-log byte size per node -- so it can only
+    be read off the emitted files, which is what the generator does.
+
+    ``tin`` is informational. ``/api/v2/tree/`` returns no path, so the e2e suite
+    resolves these entries to tree nodes by ``name``; the fixture therefore gives
+    every iteration of a test the same page count, so whichever iteration the
+    lookup lands on matches this entry.
+    """
+
+    name: str
+    path: list[str]
+    pathStr: str
+    tin: int | None
+    #: 1 when the log is published as a single file with no pagination block.
+    pagesCount: int
+    #: Table rows across every page.
+    rowCount: int
+
+
 class ExpectedRun(_Model):
     """The expectations + samples the UI asserts against for one imported run."""
 
@@ -160,6 +188,7 @@ class ExpectedRun(_Model):
     verdicts: list[str]
     measurements: list[MeasurementSummary]
     packages: list[PackageSummary]
+    logPages: list[LogPagesEntry]
     sampleTests: dict[str, list[IterationEntry]]
     # Resolved during import once the run id is known (core.importer).
     runUrl: str | None = None

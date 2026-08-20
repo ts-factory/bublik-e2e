@@ -6,7 +6,7 @@ import json
 import shlex
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -93,6 +93,14 @@ class Node:
     plan_id: int = 0
     path: List[str] = field(default_factory=list)
     path_str: str = ""
+    # How many JSON files this node's log is published across. Declared in the
+    # raw log (MI: LOG_PAGES), not derived from the row count: rgt cuts pages on
+    # raw-log byte size per node (rgt_log_split.c, MAX_FRAG_SIZE), so a chatty
+    # test with many short messages stays on one page while a terse one with a
+    # few huge ones does not. None means the log is published as a single file
+    # with no pagination block at all, which is what rgt emits unless it was run
+    # with a page selector.
+    log_pages: Optional[int] = None
 
     def add_child(self, child: "Node") -> None:
         child.parent = self
@@ -125,6 +133,11 @@ def raw_ts_to_datetime(ts: str) -> datetime:
 
 def raw_ts_to_bublik(ts: str) -> str:
     return raw_ts_to_datetime(ts).strftime(BUBLIK_TS_FORMAT)[:-3]
+
+
+def raw_ts_plus_ms(ts: str, milliseconds: int) -> str:
+    moment = raw_ts_to_datetime(ts) + timedelta(milliseconds=milliseconds)
+    return moment.strftime("%Y-%m-%d %H:%M:%S,") + f"{moment.microsecond // 1000:03d}"
 
 
 def raw_ts_to_iso(ts: str) -> str:
@@ -604,6 +617,11 @@ def parse_raw_log(
                 start_ts=message.bublik_ts,
                 tin=int(fields["tin"]),
             )
+            # /api/v2/tree/ returns no path, so the e2e suite resolves a
+            # manifest entry to a tree node by name and cannot tell two
+            # iterations of a test apart. Inheriting the page count keeps every
+            # iteration of a test identical, so whichever one it picks matches.
+            current_iteration.log_pages = current_test.log_pages
             current_test.add_child(current_iteration)
             continue
 
@@ -750,6 +768,45 @@ def parse_raw_log(
             if current_test or current_iteration or package_stack:
                 raise ValueError("RUN_END encountered with open scopes")
             root.end_ts = message.bublik_ts
+            continue
+
+        if event == "LOG_PAGES":
+            require_fields(event, fields, ["value"])
+            target = current_iteration or current_test
+            if target is None:
+                raise ValueError("LOG_PAGES requires an open test or iteration")
+            pages = int(fields["value"])
+            if pages < 1:
+                raise ValueError("LOG_PAGES must be at least 1")
+            target.log_pages = pages
+            continue
+
+        if event == "LOG_BURST":
+            require_fields(event, fields, ["count", "text"])
+            target = current_iteration or current_test
+            if target is None or (target.type == "pkg" and current_iteration is None):
+                raise ValueError("LOG_BURST requires an open iteration or leaf test")
+            count = int(fields["count"])
+            if count < 1:
+                raise ValueError("LOG_BURST count must be at least 1")
+            entity = fields.get("entity", target.name)
+            level = fields.get("level", "INFO")
+            text = fields["text"]
+            # Expanded here rather than checked into the raw log: the point of
+            # the example is to stay readable, and the raw log is copied
+            # verbatim into every published bundle.
+            for index in range(count):
+                target.events.append(
+                    LogEvent(
+                        raw_ts=raw_ts_plus_ms(message.raw_ts, index),
+                        level=level,
+                        entity=entity,
+                        user_name="Self",
+                        content_type="text",
+                        content=f"{text} {index + 1}/{count}",
+                        use_main_entity=(entity == target.name),
+                    )
+                )
             continue
 
         raise ValueError(f"Unsupported MI event: {event}")
@@ -1037,7 +1094,33 @@ def table_rows_for_node(node: Node) -> List[dict]:
     return rows
 
 
-def log_json_for_node(node: Node) -> dict:
+def split_rows_into_pages(rows: List[dict], pages: int) -> List[List[dict]]:
+    """Cut a node's rows into `pages` near-equal chunks, biggest first.
+
+    Splitting on a declared page *count* rather than a fixed page size keeps the
+    page count stable no matter how the row count drifts; a ceil(total/size)
+    chunker would quietly drop to two pages the day a test lost a few lines.
+    """
+    total = len(rows)
+    if pages < 1:
+        raise ValueError("LOG_PAGES must be at least 1")
+    if pages > total:
+        raise ValueError(f"LOG_PAGES={pages} exceeds the {total} rows the node has")
+    base, extra = divmod(total, pages)
+    chunks: List[List[dict]] = []
+    cursor = 0
+    for index in range(pages):
+        size = base + (1 if index < extra else 0)
+        chunks.append(rows[cursor : cursor + size])
+        cursor += size
+    return chunks
+
+
+def log_json_for_node(
+    node: Node,
+    rows: Optional[List[dict]] = None,
+    pagination: Optional[dict] = None,
+) -> dict:
     content = [
         {
             "type": "te-log-meta",
@@ -1052,8 +1135,17 @@ def log_json_for_node(node: Node) -> dict:
                 "items": [entity_model_for_node(child) for child in node.children],
             }
         )
-    content.append({"type": "te-log-table", "data": table_rows_for_node(node)})
-    return {"version": "v1", "root": [{"type": "te-log", "content": content}]}
+    content.append(
+        {
+            "type": "te-log-table",
+            "data": table_rows_for_node(node) if rows is None else rows,
+        }
+    )
+    block = {"type": "te-log", "content": content}
+    if pagination is not None:
+        # Key order follows xml2json.c: type, pagination, content.
+        block = {"type": "te-log", "pagination": pagination, "content": content}
+    return {"version": "v1", "root": [block]}
 
 
 def tree_entry_for_node(node: Node, file_name: str, child_files: List[str]) -> dict:
@@ -1112,10 +1204,43 @@ def write_bundle(
     def write_node(node: Node, is_root: bool = False) -> str:
         file_name = "node_1_0.json" if is_root else f"node_id{node.test_id}.json"
         child_files = [write_node(child) for child in node.children]
-        payload = log_json_for_node(node)
-        write_json(json_dir / file_name, payload, pretty)
-        if is_root:
-            write_json(json_dir / "node_id1.json", payload, pretty)
+        rows = table_rows_for_node(node)
+        # Only leaves paginate. A package's rows are one per child, and the
+        # backend only ever asks for a page of a focused result.
+        pages = node.log_pages if (not is_root and not node.children) else None
+
+        if not pages or pages == 1:
+            # Byte-identical to what this wrote before pagination existed: an
+            # unpaginated log carries no `pagination` key at all, matching rgt,
+            # which emits one only when it was given a page selector.
+            payload = log_json_for_node(node, rows)
+            write_json(json_dir / file_name, payload, pretty)
+            if is_root:
+                write_json(json_dir / "node_id1.json", payload, pretty)
+        else:
+            for index, chunk in enumerate(split_rows_into_pages(rows, pages), start=1):
+                # Page one is the unsuffixed file: rgt appends _p<N> only for
+                # N > 1 (xml2multi_common.c), so no _p1.json is ever published
+                # and `?page=1` asks the backend for a file nobody wrote.
+                name = (
+                    file_name if index == 1 else f"node_id{node.test_id}_p{index}.json"
+                )
+                write_json(
+                    json_dir / name,
+                    log_json_for_node(
+                        node, chunk, {"cur_page": index, "pages_count": pages}
+                    ),
+                    pretty,
+                )
+            # The all-pages file reports zeros, as rgt does for `-p all`; the UI
+            # recovers the real count from an already-loaded numbered page.
+            write_json(
+                json_dir / f"node_id{node.test_id}_all.json",
+                log_json_for_node(node, rows, {"cur_page": 0, "pages_count": 0}),
+                pretty,
+            )
+
+        # Only the page-one file goes into the tree: it indexes nodes, not files.
         tree[file_name] = tree_entry_for_node(node, file_name, child_files)
         return file_name
 

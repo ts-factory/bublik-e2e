@@ -62,6 +62,7 @@
 2026-04-21 12:00:00,093:[INFO    ][runner      ]  MI: TEST_PARAM key=tool value=fio
 2026-04-21 12:00:00,094:[INFO    ][runner      ]  MI: TEST_PARAM key=io_pattern value=rw
 2026-04-21 12:00:00,095:[INFO    ][runner      ]  MI: TEST_OBJECTIVE text="Check sustained mixed read/write throughput."
+2026-04-21 12:00:00,095:[INFO    ][runner      ]  MI: LOG_PAGES value=2
 2026-04-21 12:00:00,096:[INFO    ][runner      ]  MI: ITERATION_START name=throughput_rw tin=0
 2026-04-21 12:00:00,097:[INFO    ][runner      ]  MI: ITERATION_PARAM key=block_size value=128k
 2026-04-21 12:00:00,098:[INFO    ][runner      ]  MI: ITERATION_PARAM key=duration_sec value=10
@@ -70,6 +71,7 @@
 2026-04-21 12:00:00,100:[INFO    ][fio         ]  Writing job file /tmp/rw-128k.fio
 2026-04-21 12:00:00,101:[INFO    ][runner      ]  MI: STEP text="Run fio"
 2026-04-21 12:00:00,102:[INFO    ][fio         ]  fio job rw-128k started
+2026-04-21 12:00:00,103:[INFO    ][runner      ]  MI: LOG_BURST count=45 entity=fio level=INFO text="rw-128k progress sample"
 2026-04-21 12:00:05,000:[INFO    ][fio         ]  Jobs: 1 (f=1): [m(1)][50.0%][r=612MiB/s,w=404MiB/s][r=4892,w=3236 IOPS][eta 00m:05s]
 2026-04-21 12:00:09,900:[INFO    ][fio         ]  Jobs: 1 (f=1): [m(1)][99.0%][r=621MiB/s,w=410MiB/s][r=4968,w=3280 IOPS][eta 00m:00s]
 2026-04-21 12:00:09,950:[INFO    ][runner      ]  MI: GRAPH_START tool=fio title="Sampled rw-128k bandwidth" name=bandwidth-over-time x_type=sample x_name="Sample" x_units=index x_values=1,2,3
@@ -91,6 +93,7 @@
 2026-04-21 12:00:10,111:[INFO    ][fio         ]  Writing job file /tmp/rw-128k-warmup.fio
 2026-04-21 12:00:10,112:[INFO    ][runner      ]  MI: STEP text="Run fio"
 2026-04-21 12:00:10,113:[INFO    ][fio         ]  fio job rw-128k started
+2026-04-21 12:00:10,114:[INFO    ][runner      ]  MI: LOG_BURST count=45 entity=fio level=INFO text="rw-128k progress sample"
 2026-04-21 12:00:12,200:[INFO    ][fio         ]  Warmup phase completed
 2026-04-21 12:00:18,000:[INFO    ][fio         ]  Jobs: 1 (f=1): [m(1)][78.0%][r=657MiB/s,w=431MiB/s][r=5256,w=3448 IOPS][eta 00m:02s]
 2026-04-21 12:00:20,111:[INFO    ][runner      ]  MI: MEASUREMENT name=read_bw_mib_s value=655.0 units=MiB/s tool=fio stage=throughput side=read
@@ -110,17 +113,19 @@
 2026-04-21 12:00:20,126:[INFO    ][runner      ]  MI: ITERATION_OBJECTIVE text="Confirm the latency scenario is intentionally skipped in this environment."
 2026-04-21 12:00:20,127:[INFO    ][runner      ]  MI: STEP text="Evaluate random-read prerequisites"
 2026-04-21 12:00:20,128:[INFO    ][fio         ]  Random-read profile disabled by lab policy
-2026-04-21 12:00:20,129:[INFO    ][runner      ]  MI: RESULT status=SKIPPED expected=SKIPPED
-2026-04-21 12:00:20,130:[INFO    ][runner      ]  MI: ITERATION_END name=latency_randread tin=0 status=SKIPPED
+2026-04-21 12:00:20,130:[INFO    ][runner      ]  MI: LOG_BURST count=494 entity=fio level=INFO text="randread prerequisite probe"
+2026-04-21 12:00:20,700:[INFO    ][runner      ]  MI: RESULT status=SKIPPED expected=SKIPPED
+2026-04-21 12:00:20,701:[INFO    ][runner      ]  MI: ITERATION_END name=latency_randread tin=0 status=SKIPPED
 2026-04-21 12:00:30,130:[INFO    ][runner      ]  MI: ITERATION_START name=latency_randread tin=1
 2026-04-21 12:00:30,131:[INFO    ][runner      ]  MI: ITERATION_PARAM key=iodepth value=64
 2026-04-21 12:00:30,132:[INFO    ][runner      ]  MI: ITERATION_OBJECTIVE text="Show an unexpected skip when the scenario should have run."
 2026-04-21 12:00:30,133:[INFO    ][runner      ]  MI: STEP text="Evaluate random-read prerequisites"
 2026-04-21 12:00:30,134:[WARN    ][fio         ]  Random-read profile unavailable due to missing dataset
-2026-04-21 12:00:30,135:[INFO    ][runner      ]  MI: RESULT status=SKIPPED expected=PASSED
-2026-04-21 12:00:30,136:[WARN    ][runner      ]  MI: VERDICT text="Random-read path was unexpectedly unavailable"
-2026-04-21 12:00:30,137:[INFO    ][runner      ]  MI: ITERATION_END name=latency_randread tin=1 status=SKIPPED
-2026-04-21 12:00:30,138:[INFO    ][runner      ]  MI: TEST_END name=latency_randread status=SKIPPED
+2026-04-21 12:00:30,140:[INFO    ][runner      ]  MI: LOG_BURST count=494 entity=fio level=INFO text="randread prerequisite probe"
+2026-04-21 12:00:30,700:[INFO    ][runner      ]  MI: RESULT status=SKIPPED expected=PASSED
+2026-04-21 12:00:30,701:[WARN    ][runner      ]  MI: VERDICT text="Random-read path was unexpectedly unavailable"
+2026-04-21 12:00:30,702:[INFO    ][runner      ]  MI: ITERATION_END name=latency_randread tin=1 status=SKIPPED
+2026-04-21 12:00:30,703:[INFO    ][runner      ]  MI: TEST_END name=latency_randread status=SKIPPED
 2026-04-21 12:00:40,137:[INFO    ][runner      ]  MI: PACKAGE_END name=io
 
 2026-04-21 12:00:40,150:[INFO    ][runner      ]  MI: PACKAGE_START name=reliability
@@ -128,11 +133,13 @@
 2026-04-21 12:00:40,152:[INFO    ][runner      ]  MI: TEST_START name=power_cycle_recovery
 2026-04-21 12:00:40,153:[INFO    ][runner      ]  MI: TEST_PARAM key=cycles value=2
 2026-04-21 12:00:40,154:[INFO    ][runner      ]  MI: TEST_OBJECTIVE text="Confirm the device returns online after power cycling."
+2026-04-21 12:00:40,154:[INFO    ][runner      ]  MI: LOG_PAGES value=3
 2026-04-21 12:00:40,155:[INFO    ][runner      ]  MI: ITERATION_START name=power_cycle_recovery tin=0
 2026-04-21 12:00:40,156:[INFO    ][runner      ]  MI: ITERATION_PARAM key=cycle value=1
 2026-04-21 12:00:40,157:[INFO    ][runner      ]  MI: ITERATION_OBJECTIVE text="Execute the first power-cycle recovery pass."
 2026-04-21 12:00:40,158:[INFO    ][runner      ]  MI: STEP_PUSH text="Power cycle rig"
 2026-04-21 12:00:40,159:[INFO    ][powerctl    ]  Powering the rig off
+2026-04-21 12:00:40,160:[INFO    ][runner      ]  MI: LOG_BURST count=84 entity=dmesg level=INFO text="nvme queue state poll"
 2026-04-21 12:00:40,500:[WARN    ][powerctl    ]  PCIe link lost as expected
 2026-04-21 12:00:41,000:[INFO    ][powerctl    ]  Powering the rig on
 2026-04-21 12:00:41,001:[INFO    ][runner      ]  MI: STEP_POP text="Power cycle rig"
@@ -151,6 +158,7 @@
 2026-04-21 12:00:41,008:[INFO    ][runner      ]  MI: ITERATION_OBJECTIVE text="Repeat the power-cycle recovery pass."
 2026-04-21 12:00:41,009:[INFO    ][runner      ]  MI: STEP_PUSH text="Power cycle rig"
 2026-04-21 12:00:41,010:[INFO    ][powerctl    ]  Powering the rig off
+2026-04-21 12:00:41,011:[INFO    ][runner      ]  MI: LOG_BURST count=84 entity=dmesg level=INFO text="nvme queue state poll"
 2026-04-21 12:00:41,400:[WARN    ][powerctl    ]  Link training reset in progress
 2026-04-21 12:00:42,000:[INFO    ][powerctl    ]  Powering the rig on
 2026-04-21 12:00:42,001:[INFO    ][runner      ]  MI: STEP_POP text="Power cycle rig"

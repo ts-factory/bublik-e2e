@@ -288,6 +288,12 @@
         "iterationCount": {
           "type": "integer"
         },
+        "logPages": {
+          "items": {
+            "$ref": "#/$defs/LogPagesEntry"
+          },
+          "type": "array"
+        },
         "logUrl": {
           "anyOf": [
             {
@@ -365,6 +371,7 @@
         "verdicts",
         "measurements",
         "packages",
+        "logPages",
         "sampleTests"
       ],
       "type": "object"
@@ -467,6 +474,49 @@
         "verdicts",
         "artifacts",
         "measurements"
+      ],
+      "type": "object"
+    },
+    "LogPagesEntry": {
+      "additionalProperties": false,
+      "description": "A leaf whose published log is worth navigating.\n\nEither the log is split across several JSON page files, or it is a single\nfile long enough that a line near its end is off screen on load. Shorter\nleaves are omitted: every fixture leaf has a log, and listing them all would\nbury the two or three a test can actually use.\n\nHow many pages a log has is a property of how it was *published*, not of its\nrow count -- rgt cuts pages on raw-log byte size per node -- so it can only\nbe read off the emitted files, which is what the generator does.\n\n``tin`` is informational. ``/api/v2/tree/`` returns no path, so the e2e suite\nresolves these entries to tree nodes by ``name``; the fixture therefore gives\nevery iteration of a test the same page count, so whichever iteration the\nlookup lands on matches this entry.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "pagesCount": {
+          "type": "integer"
+        },
+        "path": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pathStr": {
+          "type": "string"
+        },
+        "rowCount": {
+          "type": "integer"
+        },
+        "tin": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "pathStr",
+        "tin",
+        "pagesCount",
+        "rowCount"
       ],
       "type": "object"
     },
