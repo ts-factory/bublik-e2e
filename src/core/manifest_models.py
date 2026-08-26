@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 FixtureConclusionSpec = Literal[
@@ -41,6 +41,17 @@ IterationResultStatus = Literal[
     "INCOMPLETE",
     "EMPTY",
 ]
+# Mirrors IssueCategory in bublik/data/models/issue.py.
+IssueCategory = Literal[
+    "product-defect",
+    "test-bug",
+    "env",
+    "known-issue",
+    "flaky",
+    "to-investigate",
+]
+# Matcher dimensions a rule keeps beyond the test, which is always matched.
+ClassificationMatchDimension = Literal["parameters", "verdicts", "tags"]
 RunStatus = Literal[
     "DONE",
     "WARNING",
@@ -218,6 +229,8 @@ class Bundle(_Model):
     runUrlTemplate: str
     logUrlTemplate: str
     expectedRuns: list[ExpectedRun]
+    #: Leaves this bundle had pinned by the plan's classification section.
+    pinnedResults: list[PinnedResult] = Field(default_factory=list)
     # Filled during import (core.importer): the Bublik run id and deep-links.
     runId: int | None = None
     runUrl: str | None = None
@@ -234,6 +247,81 @@ class ReportConfig(_Model):
     content: dict[str, Any]
 
 
+class PinnedResult(_Model):
+    """One leaf a classification pin forced, as generated into a bundle.
+
+    The fixture tree is identical across every run of a fixture, so a pin
+    resolves to the same test and parameters in every run it applies to. That is
+    what lets a rule written against one run be asserted against another.
+    """
+
+    pin: str
+    test: str
+    tin: int
+    pathStr: str
+    params: dict[str, Any]
+    status: IterationResultStatus
+    unexpected: bool
+    verdicts: list[str]
+
+
+class ClassificationPin(_Model):
+    """A pin, with the bundles it landed in split by import wave."""
+
+    id: str
+    fixture: str
+    test: str
+    status: IterationResultStatus
+    unexpected: bool
+    verdicts: list[str]
+    iterations: list[int]
+    conclusions: list[str]
+    #: Bundle ids imported through the API, before any rule exists.
+    seededIn: list[str]
+    #: Bundle ids held back for the UI import, which the rules should stamp.
+    appliesTo: list[str]
+
+
+class ClassificationIssue(_Model):
+    """An issue the plan declares. ``issueId`` is filled by --setup-classification."""
+
+    id: str
+    title: str
+    description: str | None
+    key: str | None
+    close: bool
+    issueId: int | None = None
+
+
+class ClassificationRule(_Model):
+    """A rule the plan declares. ``ruleId`` is filled by --setup-classification.
+
+    ``match`` lists the matcher dimensions kept beyond the test, which is always
+    matched. An empty list is a test-only rule: it matches every iteration of
+    that test, in every run of the project.
+    """
+
+    id: str
+    issue: str
+    pin: str
+    category: IssueCategory
+    #: true suppresses the failure, false leaves it counting, null marks only.
+    expected: bool | None
+    scope: Literal["future", "oneoff"]
+    match: list[ClassificationMatchDimension]
+    ruleId: int | None = None
+    #: Result ids the rule was created from, once it has been applied.
+    classifiedResultIds: list[int] = Field(default_factory=list)
+
+
+class ClassificationManifest(_Model):
+    """Everything the suite needs to drive and assert result classification."""
+
+    pins: list[ClassificationPin]
+    issues: list[ClassificationIssue]
+    rules: list[ClassificationRule]
+
+
 class Manifest(_Model):
     """Top-level e2e manifest written to ``.e2e/e2e-manifest.json``."""
 
@@ -246,6 +334,8 @@ class Manifest(_Model):
     importUrl: str
     emptyDates: list[str]
     configs: list[ReportConfig]
+    #: Present only when the plan declares a classification section.
+    classification: ClassificationManifest | None = None
     bundles: list[Bundle]
 
 

@@ -238,6 +238,91 @@ bublik-e2e schema                 # to stdout
 bublik-e2e schema --out schema.json
 ```
 
+### Classification fixtures
+
+Bublik applies active issue rules **on import**, so proving a rule works means
+showing it stamps a run that did not exist when the rule was written. That needs
+three things a plain campaign cannot express, and a `classification:` section
+adds all three.
+
+**Pins** force a named leaf to a known status and verdicts. A mix says
+"22% unexpectedFailed" and scatters it; a pin says "`rx_mode` fails, with *this*
+verdict text". Without authored verdicts every unexpected leaf in every fixture
+carries the same generated string, so a rule matching on verdicts cannot be shown
+to discriminate.
+
+**Issues and rules** are declared against those pins. A rule keeps only the
+matcher dimensions it names in `match`, so one plan can cover a test-only rule, a
+verdict rule and a parameters+verdicts rule side by side and compare how they
+behave.
+
+```yaml
+classification:
+  pins:
+    - id: rx-mode-timeout
+      fixture: net-drv-ts
+      test: rx_mode
+      status: FAILED
+      unexpected: true
+      verdicts: ["RX mode negotiation timed out"]
+      conclusions: [nok-error]   # keeps the pin out of "ok" runs
+    - id: send-receive-flaky
+      fixture: net-drv-ts
+      test: send_receive
+      verdicts: ["Intermittent checksum mismatch"]
+      iterations: [0]            # just this iteration; default is all of them
+
+  issues:
+    - id: rx-timeout
+      title: "RX mode negotiation times out on this NIC"
+      key: "ref://E2E_BUGS/E2E-101"
+
+  rules:
+    - id: rx-by-test          # test-only: every iteration of rx_mode
+      issue: rx-timeout
+      pin: rx-mode-timeout
+      category: known-issue   # expected defaults from the category (true here)
+      match: []
+    - id: rx-by-verdict       # only results carrying that verdict
+      issue: rx-timeout
+      pin: rx-mode-timeout
+      category: product-defect
+      expected: false         # explicit override: classified, still counting
+      match: [verdicts]
+```
+
+`match` takes any of `parameters`, `verdicts`, `tags`; the test is always
+matched. `expected` is tri-state — `true` suppresses the failure, `false` leaves
+it counting, `null` marks it without deciding — and defaults from `category`.
+Setting `close: true` on an issue closes it once its rules exist, which
+deactivates them and lifts suppression: the "stale classification" state.
+
+Pins are generated into every run they apply to, unconditionally. Creating the
+issues and rules through the API is opt-in:
+
+```bash
+bublik-e2e run --plan e2e/plan.yaml --setup-projects --setup-classification
+```
+
+Without the flag the pinned results are still generated, and the triage is left
+to be done by hand in the UI (or by the Playwright suite) — which is the point of
+keeping it a flag: the fixture gives you stable things to classify either way.
+
+The ordering the flag creates is what makes the assertion meaningful:
+
+| Stage | What happens |
+|-------|--------------|
+| 1 | API-imported bundles are seeded. Their pinned leaves fail with authored verdicts. |
+| 2 | `--setup-classification` classifies one result per rule via `POST /results/{id}/classify/`. |
+| 3 | The Playwright suite imports the `+ui` bundles — runs generated before any rule existed. |
+| 4 | Bublik stamps them on import; the suite asserts the stamps. |
+
+The manifest records both halves. Each pin lists `seededIn` (the runs a rule can
+be written against) and `appliesTo` (the runs it should reach), each bundle
+carries its `pinnedResults`, and `issueId`/`ruleId` are filled in once
+`--setup-classification` has run — which is also how the suite tells whether to
+create the issues itself.
+
 ## Live import simulation
 
 A real Test Environment streams a run into Bublik while it executes: `POST
@@ -292,6 +377,8 @@ bublik-e2e live basic --dry-run --output live.json
 | `core/plan_file.py` / `core/plan_models.py` | plan-file loading and its schema |
 | `core/bundle.py` | bundle generation, metadata, and result mixes |
 | `core/manifest.py` | manifest assembly and expectation extraction |
+| `core/classification.py` | pins, issues and rules: the plan's classification section |
+| `core/classify_api.py` | creating those issues and rules against imported runs |
 | `core/importer.py` | API import path and live progress table |
 | `core/live.py` | TE live-import simulation (`live` command) |
 | `core/fixture_api.py` / `core/synthetic_fixture.py` | the public fixture-authoring API |

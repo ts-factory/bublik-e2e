@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 import math
@@ -9,6 +10,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from core.classification import Pin
 from core.common import CliError, read_json, write_json
 from core.constants import (
     NOK_BORDERS,
@@ -485,7 +487,19 @@ def leaf_tests(bundle_dir: Path) -> list[dict[str, Any]]:
     return collect_leaf_tests(read_json(bundle_dir / "bublik.json"))
 
 
-def set_leaf_result(node: dict[str, Any], status: str, unexpected: bool) -> None:
+def set_leaf_result(
+    node: dict[str, Any],
+    status: str,
+    unexpected: bool,
+    verdicts: Sequence[str] | None = None,
+) -> None:
+    """Force one leaf to ``status``, and to expected/unexpected.
+
+    ``verdicts`` overrides the generated verdict text. Authored verdicts are what
+    let a classification rule match on verdicts and be shown to discriminate:
+    without them every unexpected leaf in every fixture carries the same string.
+    Passing an empty sequence clears the verdicts even on an unexpected leaf.
+    """
     expected_status = "PASSED" if unexpected else status
     if unexpected and status == "PASSED":
         expected_status = "FAILED"
@@ -494,12 +508,60 @@ def set_leaf_result(node: dict[str, Any], status: str, unexpected: bool) -> None
     if not result:
         result.append({})
     result[0]["status"] = expected_status
-    if unexpected:
+    if verdicts is not None:
+        node["obtained"]["result"]["verdicts"] = list(verdicts)
+        node["err"] = "Unexpected test result(s)" if unexpected else ""
+    elif unexpected:
         node["obtained"]["result"]["verdicts"] = ["Generated unexpected result"]
         node["err"] = "Unexpected test result(s)"
     else:
         node["obtained"]["result"]["verdicts"] = []
         node["err"] = ""
+
+
+def apply_pins(
+    leaves: list[dict[str, Any]], pins: Sequence[Pin]
+) -> tuple[set[int], list[dict[str, Any]]]:
+    """Force every leaf a pin selects, and report which leaves are now reserved.
+
+    Returns ``(reserved_indices, records)``. Reserved leaves are withheld from the
+    mix scatter so a percentage cannot overwrite a pinned result; ``records``
+    describe what was pinned, for the manifest.
+
+    A pin matches by test name and, when it names ``iterations``, by ``tin``. The
+    fixture tree is identical across every run of a fixture, so the same pin
+    selects the same leaves in every run — which is exactly what makes a rule
+    written against one run assert against another.
+    """
+    reserved: set[int] = set()
+    records: list[dict[str, Any]] = []
+    for pin in pins:
+        matched = 0
+        for index, leaf in enumerate(leaves):
+            if leaf.get("name") != pin.test or not pin.selects(leaf.get("tin", 0)):
+                continue
+            set_leaf_result(leaf, pin.status, pin.unexpected, list(pin.verdicts))
+            reserved.add(index)
+            matched += 1
+            records.append(
+                {
+                    "pin": pin.id,
+                    "test": pin.test,
+                    "tin": leaf.get("tin", 0),
+                    "pathStr": leaf.get("path_str", ""),
+                    "params": dict(leaf.get("params") or {}),
+                    "status": pin.status,
+                    "unexpected": pin.unexpected,
+                    "verdicts": list(pin.verdicts),
+                }
+            )
+        if not matched:
+            raise CliError(
+                f"pin {pin.id!r} selects no leaf: fixture {pin.fixture!r} has no "
+                f"test {pin.test!r}"
+                + (f" with tin in {list(pin.iterations)}" if pin.iterations else "")
+            )
+    return reserved, records
 
 
 def recompute_package_statuses(node: dict[str, Any]) -> str:
@@ -535,8 +597,12 @@ def is_unexpected_leaf(node: dict[str, Any]) -> bool:
 
 
 def apply_mix(
-    bundle_dir: Path, mix: list[MixValue], conclusion: str, pretty: bool
-) -> None:
+    bundle_dir: Path,
+    mix: list[MixValue],
+    conclusion: str,
+    pretty: bool,
+    pins: Sequence[Pin] = (),
+) -> list[dict[str, Any]]:
     bublik_path = bundle_dir / "bublik.json"
     bublik = read_json(bublik_path)
     leaves = collect_leaf_tests(bublik)
@@ -554,6 +620,16 @@ def apply_mix(
     for leaf in leaves:
         set_leaf_result(leaf, "PASSED", False)
 
+    # Pins are applied after the reset and before the scatter, so a pinned leaf
+    # keeps its authored status and verdicts while still counting towards the
+    # conclusion guard rails below.
+    reserved, pin_records = apply_pins(leaves, pins)
+    free = [index for index in range(total) if index not in reserved]
+    if pins and not free:
+        raise CliError(
+            f"pins reserve every leaf in {bundle_dir}; leave room for the mix"
+        )
+
     assignments: list[tuple[str, bool]] = []
     for item in mix:
         prop, type_name = parse_mix_key(item.key)
@@ -568,17 +644,20 @@ def apply_mix(
             status = "INCOMPLETE" if type_name == "incomplete" else status
         assignments.extend([(status, unexpected)] * count)
 
-    if len(assignments) > total:
+    if len(assignments) > len(free):
         raise CliError(f"mix uses more results than fixture has: {bundle_dir}")
 
-    # Scatter the assignments across the whole leaf list using a coprime
+    # Scatter the assignments across the unpinned leaves using a coprime
     # golden-ratio stride so every package gets a representative share, instead
-    # of clustering all non-passing results in the first few packages.
-    stride = max(1, int(total * 0.6180339887))
-    while total > 1 and math.gcd(stride, total) != 1:
+    # of clustering all non-passing results in the first few packages. The stride
+    # is taken over the free list, so adding a pin shifts which leaves the mix
+    # lands on but keeps the placement deterministic for a given plan.
+    span = len(free)
+    stride = max(1, int(span * 0.6180339887))
+    while span > 1 and math.gcd(stride, span) != 1:
         stride += 1
     for offset, (status, unexpected) in enumerate(assignments):
-        set_leaf_result(leaves[(offset * stride) % total], status, unexpected)
+        set_leaf_result(leaves[free[(offset * stride) % span]], status, unexpected)
 
     for root in bublik.get("iters", []):
         recompute_package_statuses(root)
@@ -605,6 +684,7 @@ def apply_mix(
         datetime.fromisoformat(start_value).utcoffset() if start_value else timedelta()
     )
     synchronize_json_logs(bundle_dir, bublik, pretty, tz_offset=offset or timedelta())
+    return pin_records
 
 
 def spec_from_plan(plan: PlannedRun) -> FixtureSpec:

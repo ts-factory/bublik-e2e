@@ -31,6 +31,7 @@ import urllib.parse
 from pydantic import ValidationError
 from rich.live import Live
 
+from core.classify_api import apply_classification
 from core.common import CliError, console, normalize_url, read_json, write_json
 from core.constants import NOK_BORDERS, RUN_COMPLETE_FILE
 from core.manifest import generate_manifest
@@ -698,6 +699,17 @@ def import_via_api(
         completed_at = {}
         resolve_deep_links(manifest)
         write_json(manifest_path, manifest, True)
+
+    if getattr(args, "setup_classification", False):
+        cookie_dir = Path(tempfile.mkdtemp(prefix="bublik-e2e-classify-"))
+        cookie_jar = cookie_dir / "cookies.txt"
+        try:
+            login(base_url, settings, cookie_jar)
+            apply_classification(
+                manifest, manifest_path, base_url, cookie_jar, curl_json
+            )
+        finally:
+            shutil.rmtree(cookie_dir, ignore_errors=True)
 
     elapsed = datetime.now().timestamp() - import_start
     parts = [f"imported {len(jobs)} fixture runs via API in {format_duration(elapsed)}"]

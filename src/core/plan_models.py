@@ -33,6 +33,105 @@ DaySpec = Union[list[str], str]
 MixName = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")]
 
 
+class PinSpec(BaseModel):
+    """A leaf forced to a known status and verdict set in every matching run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="Referenced from a rule's 'pin'.")
+    fixture: str = Field(description="Fixture whose tree contains the test.")
+    test: str = Field(description="Leaf test name, e.g. 'send_receive'.")
+    status: str = Field(
+        default="FAILED",
+        description="Obtained result status: PASSED, FAILED, SKIPPED, KILLED, ...",
+    )
+    unexpected: bool = Field(
+        default=True,
+        description=(
+            "Whether the result counts as unexpected. Pinning an unexpected "
+            "result into an 'ok' run changes that run's conclusion, so such a "
+            "pin should name its conclusions."
+        ),
+    )
+    verdicts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Verdict strings to author on the leaf. Without these every "
+            "unexpected leaf carries the same generated text and a rule "
+            "matching on verdicts cannot be shown to discriminate."
+        ),
+    )
+    iterations: list[int] = Field(
+        default_factory=list,
+        description="Iteration indices (tin) to pin; empty means every one.",
+    )
+    conclusions: list[str] = Field(
+        default_factory=list,
+        description="Limit the pin to runs of these conclusions; empty means all.",
+    )
+
+
+class IssueSpecModel(BaseModel):
+    """An issue to create before the held-back runs are imported."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="Referenced from a rule's 'issue'.")
+    title: str
+    description: str | None = None
+    key: str | None = Field(
+        default=None,
+        description="External reference, e.g. 'ref://E2E_BUGS/E2E-101'.",
+    )
+    close: bool = Field(
+        default=False,
+        description=(
+            "Close the issue once its rules exist. Closing deactivates its "
+            "rules and lifts suppression — the 'stale classification' state."
+        ),
+    )
+
+
+class RuleSpecModel(BaseModel):
+    """A rule, created by classifying one result of its pin."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    issue: str = Field(description="Id of the issue in 'issues'.")
+    pin: str = Field(description="Id of the pin whose result is classified.")
+    category: str = Field(default="known-issue")
+    expected: bool | None = Field(
+        default=None,
+        description=(
+            "Disposition. true suppresses the failure, false leaves it "
+            "counting, null marks it without deciding. Defaults from category."
+        ),
+    )
+    scope: str = Field(
+        default="future",
+        description="'future' creates an active rule; 'oneoff' stamps only this result.",
+    )
+    match: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Matcher dimensions to keep beyond the test, which is always "
+            "matched: any of parameters, verdicts, tags. Empty is a test-only "
+            "rule, matching every iteration of that test."
+        ),
+    )
+
+
+class ClassificationSpec(BaseModel):
+    """Pinned leaves plus the issues and rules written against them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pins: list[PinSpec] = Field(default_factory=list)
+    issues: list[IssueSpecModel] = Field(default_factory=list)
+    rules: list[RuleSpecModel] = Field(default_factory=list)
+
+
 class Plan(BaseModel):
     """A versioned fixture campaign."""
 
@@ -55,6 +154,15 @@ class Plan(BaseModel):
             "are absolute counts (3) or shares of the run ('20%')."
         ),
     )
+    classification: ClassificationSpec | None = Field(
+        default=None,
+        description=(
+            "Classification fixtures: leaves pinned to known statuses and "
+            "verdicts, and the issues and rules written against them. Rules are "
+            "created after the API-seeded runs are imported, so a later import "
+            "(a '+ui' run) proves they apply to runs that did not exist yet."
+        ),
+    )
     days: dict[date, DaySpec] = Field(
         description=(
             "Runs per calendar date. Each item is "
@@ -75,6 +183,18 @@ class Plan(BaseModel):
             f"{day.isoformat()}:{_render_day(spec)}"
             for day, spec in sorted(self.days.items())
         ]
+
+    def classification_spec(self) -> dict[str, Any] | None:
+        """Render the classification section as the plain mapping core expects.
+
+        ``exclude_unset`` is load-bearing: a rule's ``expected`` is tri-state, so
+        an explicit ``expected: null`` ("mark it, decide later") has to stay
+        distinguishable from an omitted one ("default from the category"). Every
+        other field is defaulted by :mod:`core.classification` when absent.
+        """
+        if self.classification is None:
+            return None
+        return self.classification.model_dump(exclude_unset=True)
 
 
 def _render_mix(spec: MixSpec) -> str:

@@ -79,7 +79,14 @@ def load_plan(path: Path) -> Plan:
         raise CliError(_format_errors(path, exc)) from exc
 
 
-def load_plan_file(path: Path) -> tuple[int | None, list[str], list[str]]:
-    """Read ``path`` and return ``(runs, mix_entries, day_entries)``."""
+def load_plan_file(
+    path: Path,
+) -> tuple[int | None, list[str], list[str], dict | None]:
+    """Read ``path`` and return ``(runs, mix_entries, day_entries, classification)``."""
     plan = load_plan(path)
-    return plan.runs, plan.mix_options(), plan.day_options()
+    return (
+        plan.runs,
+        plan.mix_options(),
+        plan.day_options(),
+        plan.classification_spec(),
+    )

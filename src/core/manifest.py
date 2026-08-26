@@ -33,6 +33,7 @@ from core.constants import (
 )
 from core.discovery import selected_fixtures
 from core.manifest_models import Manifest
+from core.classification import build_classification, classification_manifest
 from core.planning import build_mixes, build_plan
 from core.run_log_schema import (
     load_meta_data_validator,
@@ -386,6 +387,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
     log_url_template = settings.log_url_template
     fixtures = selected_fixtures(args)
     mixes = build_mixes(args)
+    classification = build_classification(getattr(args, "classification", None))
     planned_runs, empty_dates = build_plan(args, fixtures, mixes)
     bundles: list[dict[str, Any]] = []
     publication_dir = (
@@ -405,11 +407,12 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
             spec = spec_from_plan(plan)
             bundle_output_dir = staging_dir / spec.id
             generate_bundle(plan.fixture, spec, bundle_output_dir, args.pretty)
-            apply_mix(
+            pin_records = apply_mix(
                 bundle_output_dir,
                 mixes[plan.mix_name],
                 spec.conclusion,
                 args.pretty,
+                pins=classification.pins_for(plan.fixture.name, spec.conclusion),
             )
             validate_run_log(
                 bundle_output_dir / "bublik.json",
@@ -451,6 +454,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
                     "date": spec.run_date,
                     "importUrl": import_url,
                     "importVia": plan.import_via,
+                    "pinnedResults": pin_records,
                     "project": spec.project,
                     "e2eRunId": spec.fixture_id,
                     "runStatus": get_meta_value(metas, "RUN_STATUS"),
@@ -514,6 +518,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
             "importUrl": f"{logs_base}/{urllib.parse.quote(seg)}/",
             "emptyDates": sorted(set(empty_dates)),
             "configs": configs,
+            "classification": classification_manifest(classification, bundles),
             "bundles": bundles,
         }
         # Validate before replacing either published artifact.

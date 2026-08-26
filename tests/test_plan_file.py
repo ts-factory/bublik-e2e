@@ -97,7 +97,7 @@ def test_json_plans_still_load(tmp_path: Path) -> None:
         json.dumps({"version": 1, "days": {"2026-04-20": "basic.ok=1"}}),
         encoding="utf-8",
     )
-    assert load_plan_file(path) == (None, [], ["2026-04-20:basic.ok=1"])
+    assert load_plan_file(path) == (None, [], ["2026-04-20:basic.ok=1"], None)
 
 
 def test_days_are_emitted_oldest_first(tmp_path: Path) -> None:
@@ -112,7 +112,7 @@ days:
     - basic.ok=1
 """,
     )
-    _, _, days = load_plan_file(path)
+    _, _, days, _ = load_plan_file(path)
     assert days == ["2026-04-20:basic.ok=1", "2026-04-22:basic.ok=1"]
 
 
@@ -127,7 +127,7 @@ days:
     - basic.ok=1
 """,
     )
-    _, _, days = load_plan_file(path)
+    _, _, days, _ = load_plan_file(path)
     assert days == ["2026-04-19:", "2026-04-20:basic.ok=1"]
 
 
@@ -298,7 +298,13 @@ def test_schema_kind_plan_is_exportable() -> None:
     assert result.exit_code == 0, result.output
     schema = json.loads(result.stdout)
     assert schema["additionalProperties"] is False
-    assert set(schema["properties"]) == {"version", "runs", "mixes", "days"}
+    assert set(schema["properties"]) == {
+        "version",
+        "runs",
+        "mixes",
+        "days",
+        "classification",
+    }
     assert "days" in schema["required"]
 
 

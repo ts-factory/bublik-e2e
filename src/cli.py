@@ -176,6 +176,17 @@ SetupProjectsOpt = Annotated[
         "'meta', and 'per_conf' configs before importing.",
     ),
 ]
+SetupClassificationOpt = Annotated[
+    bool,
+    typer.Option(
+        "--setup-classification",
+        help="After importing, create the plan's classification issues and "
+        "rules through the API, so a later import proves they apply to runs "
+        "that did not exist when the rule was written. Off by default: the "
+        "same triage can be done by hand in the UI, and the plan's pinned "
+        "results are generated either way.",
+    ),
+]
 TimeoutOpt = Annotated[
     int,
     typer.Option(
@@ -267,22 +278,27 @@ def _plan_or_exit(
     day: Optional[List[str]],
     fill: Optional[str],
     mix: Optional[List[str]],
-) -> tuple[Optional[int], List[str], List[str]]:
-    """Fold a --plan file into the (runs, day, mix) triple the core expects."""
+) -> tuple[Optional[int], List[str], List[str], Optional[dict]]:
+    """Fold a --plan file into the (runs, day, mix, classification) the core expects."""
     if plan is None:
-        return runs, day or [], mix or []
+        return runs, day or [], mix or [], None
     try:
         if day:
             raise CliError("--plan and --day are mutually exclusive")
         if fill:
             raise CliError("--plan and --fill are mutually exclusive")
-        plan_runs, plan_mix, plan_day = load_plan_file(plan)
+        plan_runs, plan_mix, plan_day, plan_classification = load_plan_file(plan)
     except CliError as exc:
         console.print(f"[bold red]error:[/] {exc}", soft_wrap=True)
         raise typer.Exit(code=1)
     # An explicit --runs still wins, so a plan can be spot-checked from the CLI;
     # extra --mix definitions are additive and may override a plan's mix.
-    return (runs if runs is not None else plan_runs, plan_day, plan_mix + (mix or []))
+    return (
+        runs if runs is not None else plan_runs,
+        plan_day,
+        plan_mix + (mix or []),
+        plan_classification,
+    )
 
 
 @app.command(epilog=GENERATE_EPILOG)
@@ -303,7 +319,7 @@ def generate(
     manifest: ManifestOpt = None,
 ) -> None:
     """Generate bundles into --publish-dir and write the manifest. No import."""
-    runs, day, mix = _plan_or_exit(plan, runs, day, fill, mix)
+    runs, day, mix, classification = _plan_or_exit(plan, runs, day, fill, mix)
     _dispatch(
         generate_manifest,
         url=url,
@@ -319,6 +335,7 @@ def generate(
         pretty=pretty,
         run_log_schema=run_log_schema,
         meta_data_schema=meta_data_schema,
+        classification=classification,
     )
 
 
@@ -330,6 +347,7 @@ def import_(
     email: EmailOpt = None,
     password: PasswordOpt = None,
     setup_projects: SetupProjectsOpt = False,
+    setup_classification: SetupClassificationOpt = False,
     timeout: TimeoutOpt = 600,
     include_ui: IncludeUiOpt = False,
 ) -> None:
@@ -342,6 +360,7 @@ def import_(
         email=email,
         password=password,
         setup_projects=setup_projects,
+        setup_classification=setup_classification,
         timeout=timeout,
         include_ui=include_ui,
     )
@@ -366,11 +385,12 @@ def run(
     email: EmailOpt = None,
     password: PasswordOpt = None,
     setup_projects: SetupProjectsOpt = False,
+    setup_classification: SetupClassificationOpt = False,
     timeout: TimeoutOpt = 600,
     include_ui: IncludeUiOpt = False,
 ) -> None:
     """Generate bundles and import them in one shot (generate + import)."""
-    runs, day, mix = _plan_or_exit(plan, runs, day, fill, mix)
+    runs, day, mix, classification = _plan_or_exit(plan, runs, day, fill, mix)
     _dispatch(
         generate_and_import,
         url=url,
@@ -389,8 +409,10 @@ def run(
         email=email,
         password=password,
         setup_projects=setup_projects,
+        setup_classification=setup_classification,
         timeout=timeout,
         include_ui=include_ui,
+        classification=classification,
     )
 
 
@@ -556,7 +578,7 @@ def plan(
             f"[bold red]error:[/] --by must be one of: {', '.join(sorted(groups))}"
         )
         raise typer.Exit(code=1)
-    runs, day, mix = _plan_or_exit(plan, runs, day, None, mix)
+    runs, day, mix, classification = _plan_or_exit(plan, runs, day, None, mix)
     try:
         args = argparse.Namespace(
             fixture=fixture or [], runs=runs, day=day, fill=None, dates=None, mix=mix
