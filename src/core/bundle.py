@@ -645,7 +645,12 @@ def apply_mix(
         assignments.extend([(status, unexpected)] * count)
 
     if len(assignments) > len(free):
-        raise CliError(f"mix uses more results than fixture has: {bundle_dir}")
+        detail = f"mix needs {len(assignments)} of {total} leaves"
+        if reserved:
+            detail += f", but {len(reserved)} are reserved by pins, leaving {len(free)}"
+        raise CliError(
+            f"mix uses more results than fixture has: {bundle_dir} ({detail})"
+        )
 
     # Scatter the assignments across the unpinned leaves using a coprime
     # golden-ratio stride so every package gets a representative share, instead

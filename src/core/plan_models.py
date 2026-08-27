@@ -90,6 +90,37 @@ class IssueSpecModel(BaseModel):
             "rules and lifts suppression — the 'stale classification' state."
         ),
     )
+    rules: list[NestedRuleSpec] = Field(
+        default_factory=list,
+        description=(
+            "Rules for this issue, written inline. Equivalent to entries in the "
+            "top-level 'rules' with 'issue' set to this issue's id."
+        ),
+    )
+
+
+class NestedRuleSpec(BaseModel):
+    """A rule written inline under its issue, which supplies the ``issue`` link.
+
+    At the scale a populated instance needs — dozens of issues — repeating the
+    issue id on every rule is most of the file. Nesting drops that, and an
+    omitted ``id`` is derived from the issue's.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    pin: str = Field(description="Id of the pin whose result is classified.")
+    category: str = Field(default="known-issue")
+    expected: bool | None = Field(
+        default=None,
+        description=(
+            "Disposition. true suppresses the failure, false leaves it "
+            "counting, null marks it without deciding. Defaults from category."
+        ),
+    )
+    scope: str = Field(default="future")
+    match: list[str] = Field(default_factory=list)
 
 
 class RuleSpecModel(BaseModel):

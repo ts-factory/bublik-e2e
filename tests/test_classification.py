@@ -501,3 +501,75 @@ def test_apply_classification_is_idempotent(tmp_path: Path) -> None:
 
     assert not [c for c in calls if c[1].endswith("/classify/")]
     assert not [c for c in calls if c[1].endswith("/close/")]
+
+
+# --------------------------------------------------------------------------
+# Rules nested under their issue
+# --------------------------------------------------------------------------
+
+
+def test_nested_rules_are_lifted_and_linked_to_their_issue() -> None:
+    plan = build_classification(
+        {
+            "pins": [
+                {"id": "rx", "fixture": "net-drv-ts", "test": "rx_mode"},
+            ],
+            "issues": [
+                {
+                    "id": "known",
+                    "title": "Known",
+                    "rules": [
+                        {"pin": "rx", "category": "known-issue"},
+                        {"pin": "rx", "category": "product-defect"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert [rule.issue for rule in plan.rules] == ["known", "known"]
+    # An omitted id is derived, which at this scale is most of the file.
+    assert [rule.id for rule in plan.rules] == ["known-1", "known-2"]
+
+
+def test_a_nested_rule_may_still_name_its_own_id() -> None:
+    plan = build_classification(
+        {
+            "pins": [{"id": "rx", "fixture": "net-drv-ts", "test": "rx_mode"}],
+            "issues": [
+                {
+                    "id": "known",
+                    "title": "Known",
+                    "rules": [{"id": "explicit", "pin": "rx"}],
+                }
+            ],
+        }
+    )
+
+    assert plan.rules[0].id == "explicit"
+
+
+def test_nested_and_flat_rules_can_be_mixed() -> None:
+    plan = build_classification(
+        {
+            "pins": [{"id": "rx", "fixture": "net-drv-ts", "test": "rx_mode"}],
+            "issues": [
+                {"id": "a", "title": "A", "rules": [{"pin": "rx"}]},
+                {"id": "b", "title": "B"},
+            ],
+            "rules": [{"id": "flat", "issue": "b", "pin": "rx"}],
+        }
+    )
+
+    assert {rule.id for rule in plan.rules} == {"a-1", "flat"}
+
+
+def test_a_derived_id_colliding_with_a_flat_one_is_rejected() -> None:
+    with pytest.raises(CliError, match="duplicate classification rule"):
+        build_classification(
+            {
+                "pins": [{"id": "rx", "fixture": "net-drv-ts", "test": "rx_mode"}],
+                "issues": [{"id": "a", "title": "A", "rules": [{"pin": "rx"}]}],
+                "rules": [{"id": "a-1", "issue": "a", "pin": "rx"}],
+            }
+        )

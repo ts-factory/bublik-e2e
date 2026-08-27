@@ -188,9 +188,21 @@ def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
 
     raw_pins = list(raw.get("pins") or [])
     raw_issues = list(raw.get("issues") or [])
-    raw_rules = list(raw.get("rules") or [])
     _unique_ids(raw_pins, "pin")
     _unique_ids(raw_issues, "issue")
+
+    # Rules nested under an issue are lifted into the flat list with their
+    # `issue` filled in, so everything downstream sees one shape. An omitted id
+    # is derived from the issue's, which at this scale is most of the file.
+    raw_rules: list[dict[str, Any]] = []
+    for issue in raw_issues:
+        for index, rule in enumerate(issue.get("rules") or [], start=1):
+            nested = dict(rule)
+            nested["issue"] = issue["id"]
+            if not nested.get("id"):
+                nested["id"] = f"{issue['id']}-{index}"
+            raw_rules.append(nested)
+    raw_rules.extend(raw.get("rules") or [])
     _unique_ids(raw_rules, "rule")
 
     pins: list[Pin] = []
