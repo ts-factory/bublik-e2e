@@ -573,3 +573,72 @@ def test_a_derived_id_colliding_with_a_flat_one_is_rejected() -> None:
                 "rules": [{"id": "a-1", "issue": "a", "pin": "rx"}],
             }
         )
+
+
+# --------------------------------------------------------------------------
+# Guarding against a run that predates its pin
+# --------------------------------------------------------------------------
+
+
+def _stale_fetch(live_verdicts: list[str]):
+    def fetch(_url: str, **_: object) -> dict:
+        return {
+            "results": [
+                {
+                    "result_id": 5,
+                    "run_id": 7,
+                    "parameters": ["mtu=9000"],
+                    "obtained_result": {"verdicts": live_verdicts},
+                }
+            ]
+        }
+
+    return fetch
+
+
+def test_a_result_missing_the_pins_verdicts_is_rejected() -> None:
+    """Silently classifying it would create a broader rule than declared.
+
+    A rule that asked to match on verdicts, given none to match on, becomes
+    test-only and stamps every iteration of that test.
+    """
+    record = {
+        "pin": "mtu",
+        "test": "mtu_tcp",
+        "params": {"mtu": "9000"},
+        "verdicts": ["TCP fragment lost above MTU"],
+    }
+
+    with pytest.raises(CliError, match="older than the pin"):
+        find_result_id("http://host", 7, record, Path("jar"), _stale_fetch([]))
+
+
+def test_a_result_carrying_the_pins_verdicts_resolves() -> None:
+    record = {
+        "pin": "mtu",
+        "test": "mtu_tcp",
+        "params": {"mtu": "9000"},
+        "verdicts": ["TCP fragment lost above MTU"],
+    }
+    fetch = _stale_fetch(["TCP fragment lost above MTU"])
+
+    assert find_result_id("http://host", 7, record, Path("jar"), fetch) == 5
+
+
+def test_extra_verdicts_on_the_result_are_fine() -> None:
+    """The pin's verdicts are a subset check, matching the backend's matcher."""
+    record = {
+        "pin": "mtu",
+        "test": "mtu_tcp",
+        "params": {"mtu": "9000"},
+        "verdicts": ["TCP fragment lost above MTU"],
+    }
+    fetch = _stale_fetch(["TCP fragment lost above MTU", "Something else"])
+
+    assert find_result_id("http://host", 7, record, Path("jar"), fetch) == 5
+
+
+def test_a_pin_authoring_no_verdicts_skips_the_check() -> None:
+    record = {"pin": "p", "test": "mtu_tcp", "params": {"mtu": "9000"}}
+
+    assert find_result_id("http://host", 7, record, Path("jar"), _stale_fetch([])) == 5

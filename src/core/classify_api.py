@@ -91,8 +91,27 @@ def find_result_id(
     wanted = _param_strings(record.get("params") or {})
     for result in in_run:
         got = set(result.get("parameters") or [])
-        if wanted <= got:
-            return int(result["result_id"])
+        if not wanted <= got:
+            continue
+        # The pin's verdicts must actually be on the imported result. When they
+        # are not, the run in the instance predates the pin: regenerating a
+        # bundle does not re-import it, since reconciliation matches on the
+        # source URL and finds the old run. Classifying anyway would silently
+        # create a *broader* rule than the plan declares -- a rule that asked to
+        # match on verdicts, given none to match on, becomes test-only and
+        # stamps every iteration of that test.
+        expected_verdicts = set(record.get("verdicts") or [])
+        if expected_verdicts:
+            live = set(result["obtained_result"].get("verdicts") or [])
+            if not expected_verdicts <= live:
+                raise CliError(
+                    f"pin {record['pin']!r}: result {result['result_id']} in run "
+                    f"{run_id} does not carry the pin's verdicts "
+                    f"{sorted(expected_verdicts)} (it has {sorted(live)}). "
+                    "The imported run is older than the pin -- re-import it, or "
+                    "reset the stack, before applying classification."
+                )
+        return int(result["result_id"])
     raise CliError(
         f"pin {record['pin']!r}: no result in run {run_id} matches test "
         f"{record['test']!r} with parameters {sorted(wanted)}; the run has "

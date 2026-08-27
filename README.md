@@ -323,6 +323,29 @@ carries its `pinnedResults`, and `issueId`/`ruleId` are filled in once
 `--setup-classification` has run — which is also how the suite tells whether to
 create the issues itself.
 
+> **Adding or changing a pin needs a re-import.** Regenerating a bundle does not
+> re-import it: reconciliation matches on the source URL and finds the run
+> already in the instance, so the *old* results stay, without the new authored
+> verdicts. `--setup-classification` refuses to classify one of those rather
+> than quietly building a broader rule than the plan asks for — a rule matching
+> on verdicts, handed a result with none, captures an empty list, and an empty
+> dimension is not applied, so it silently becomes test-only. Reset the stack
+> (`down --volumes`, then up and seed) after editing pins.
+
+Rules may also be written inline under their issue, which supplies the `issue`
+link and derives an omitted `id` from the issue's — worth it once a plan carries
+dozens of issues:
+
+```yaml
+  issues:
+    - id: rx-timeout
+      title: "RX mode negotiation times out on this NIC"
+      key: ref://E2E_BUGS/E2E-101
+      rules:
+        - {pin: rx-mode-timeout, category: known-issue, match: []}
+        - {pin: rx-mode-timeout, category: product-defect, expected: false, match: [verdicts]}
+```
+
 ## Live import simulation
 
 A real Test Environment streams a run into Bublik while it executes: `POST
