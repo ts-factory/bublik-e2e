@@ -26,7 +26,8 @@ from core.live import simulate_live_run
 from core.manifest import generate_manifest
 from core.manifest_models import manifest_json_schema
 from core.plan_models import plan_json_schema
-from core.plan_file import load_plan_file
+from core.plan_file import load_plan
+from core.trackers import project_trackers
 from core.planning import build_mixes, build_plan
 
 app = typer.Typer(
@@ -278,26 +279,28 @@ def _plan_or_exit(
     day: Optional[List[str]],
     fill: Optional[str],
     mix: Optional[List[str]],
-) -> tuple[Optional[int], List[str], List[str], Optional[dict]]:
-    """Fold a --plan file into the (runs, day, mix, classification) the core expects."""
+) -> tuple[Optional[int], List[str], List[str], Optional[dict], dict]:
+    """Fold a --plan file into the (runs, day, mix, classification, trackers)
+    the core expects."""
     if plan is None:
-        return runs, day or [], mix or [], None
+        return runs, day or [], mix or [], None, {}
     try:
         if day:
             raise CliError("--plan and --day are mutually exclusive")
         if fill:
             raise CliError("--plan and --fill are mutually exclusive")
-        plan_runs, plan_mix, plan_day, plan_classification = load_plan_file(plan)
+        loaded = load_plan(plan)
     except CliError as exc:
         console.print(f"[bold red]error:[/] {exc}", soft_wrap=True)
         raise typer.Exit(code=1)
     # An explicit --runs still wins, so a plan can be spot-checked from the CLI;
     # extra --mix definitions are additive and may override a plan's mix.
     return (
-        runs if runs is not None else plan_runs,
-        plan_day,
-        plan_mix + (mix or []),
-        plan_classification,
+        runs if runs is not None else loaded.runs,
+        loaded.day_options(),
+        loaded.mix_options() + (mix or []),
+        loaded.classification_spec(),
+        loaded.tracker_spec(),
     )
 
 
@@ -319,7 +322,7 @@ def generate(
     manifest: ManifestOpt = None,
 ) -> None:
     """Generate bundles into --publish-dir and write the manifest. No import."""
-    runs, day, mix, classification = _plan_or_exit(plan, runs, day, fill, mix)
+    runs, day, mix, classification, trackers = _plan_or_exit(plan, runs, day, fill, mix)
     _dispatch(
         generate_manifest,
         url=url,
@@ -336,6 +339,7 @@ def generate(
         run_log_schema=run_log_schema,
         meta_data_schema=meta_data_schema,
         classification=classification,
+        trackers=trackers,
     )
 
 
@@ -390,7 +394,7 @@ def run(
     include_ui: IncludeUiOpt = False,
 ) -> None:
     """Generate bundles and import them in one shot (generate + import)."""
-    runs, day, mix, classification = _plan_or_exit(plan, runs, day, fill, mix)
+    runs, day, mix, classification, trackers = _plan_or_exit(plan, runs, day, fill, mix)
     _dispatch(
         generate_and_import,
         url=url,
@@ -413,6 +417,7 @@ def run(
         timeout=timeout,
         include_ui=include_ui,
         classification=classification,
+        trackers=trackers,
     )
 
 
@@ -578,7 +583,7 @@ def plan(
             f"[bold red]error:[/] --by must be one of: {', '.join(sorted(groups))}"
         )
         raise typer.Exit(code=1)
-    runs, day, mix, classification = _plan_or_exit(plan, runs, day, None, mix)
+    runs, day, mix, _, trackers = _plan_or_exit(plan, runs, day, None, mix)
     try:
         args = argparse.Namespace(
             fixture=fixture or [], runs=runs, day=day, fill=None, dates=None, mix=mix
@@ -586,6 +591,7 @@ def plan(
         fixtures = selected_fixtures(args)
         mixes = build_mixes(args)
         planned, empty_dates = build_plan(args, fixtures, mixes)
+        project_trackers(fixtures, trackers)
     except CliError as exc:
         console.print(f"[bold red]error:[/] {exc}", soft_wrap=True)
         raise typer.Exit(code=1)

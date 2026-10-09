@@ -247,6 +247,27 @@ class ReportConfig(_Model):
     content: dict[str, Any]
 
 
+class Tracker(_Model):
+    """An issue tracker, configured under ISSUES in a project's references config.
+
+    ``id`` is the TRACKER of a ``ref://TRACKER/KEY`` bug key; a key whose
+    tracker is not configured in its project has no external link.
+    """
+
+    id: str
+    name: str
+    uri: str
+
+
+class Project(_Model):
+    """A Bublik project the fixtures land in, as --setup-projects configures it."""
+
+    name: str
+    fixtures: list[str]
+    #: In config order; the first is the UI's default tracker. May be empty.
+    trackers: list[Tracker]
+
+
 class PinnedResult(_Model):
     """One leaf a classification pin forced, as generated into a bundle.
 
@@ -339,6 +360,8 @@ class Manifest(_Model):
     importUrl: str
     emptyDates: list[str]
     configs: list[ReportConfig]
+    #: Each project's issue trackers. Absent from manifests that predate it.
+    projects: list[Project] = Field(default_factory=list)
     #: Present only when the plan declares a classification section.
     classification: ClassificationManifest | None = None
     bundles: list[Bundle]

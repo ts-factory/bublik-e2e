@@ -211,6 +211,35 @@ Pass `--setup-projects` to create any missing projects and the per-project
 `references` config (with `LOGS_BASES` pointed at `{url}/logs/`) before importing
 — omit it to assume the instance is already configured.
 
+#### Issue trackers per fixture
+
+`--setup-projects` writes each project's issue trackers under `ISSUES` in its
+`references` config. By default every project gets one tracker, `E2E_BUGS`. A
+plan can declare them per fixture instead:
+
+```yaml
+fixtures:
+  net-drv-ts:
+    trackers:                     # in order; the first is the UI's default
+      - {id: NET_BUGS, uri: "https://net-bugs.example.invalid/browse/"}
+      - {id: E2E_BUGS, name: E2E Bug Tracker, uri: "https://bugs.example.invalid/issue/"}
+  dpdk-ethdev-ts:
+    trackers: []                  # no tracker configured at all
+  # basic is not listed, so it keeps the default E2E_BUGS
+```
+
+`id` is the `TRACKER` of a `ref://TRACKER/KEY` bug key. `name` is the display
+name and defaults to the id. `uri` is the prefix the key is appended to. A
+fixture left out of `fixtures`, or listed without `trackers`, keeps the default.
+Fixtures that share a Bublik project must declare the same list. Unknown fixtures,
+duplicate ids and malformed ids or URIs are rejected when the plan is validated,
+and the error names the fixture.
+
+Re-running `--setup-projects` converges on the plan: an existing `references`
+config is updated in place, not skipped. The manifest records what was asked for
+in `projects`, one entry per project with its `fixtures` and `trackers`, so a
+scenario can find, say, the project with no tracker without naming it.
+
 Runs planned with a `+ui` marker (e.g. `--day "2026-04-21:basic.ok+ui=1"`) get
 `importVia: "ui"` in the manifest and are **not** imported by the CLI — the
 Playwright suite imports them through the UI import form, which keeps that form

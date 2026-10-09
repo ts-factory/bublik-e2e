@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # A mix value is an absolute count (3) or a share of the run ("20%").
 MixValueSpec = Union[int, float, str]
@@ -159,6 +159,50 @@ class RuleSpecModel(BaseModel):
     )
 
 
+class TrackerSpec(BaseModel):
+    """One issue tracker written under ISSUES in a project's references config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        pattern=r"^[^/\s]+$",
+        description=(
+            "The TRACKER in a 'ref://TRACKER/KEY' bug key, and the ISSUES key "
+            "in the references config."
+        ),
+    )
+    name: str | None = Field(
+        default=None, description="Display name. Defaults to the id."
+    )
+    uri: str = Field(
+        pattern=r"^https?://",
+        description="Prefix a bug key's KEY is appended to, to link it.",
+    )
+
+
+class FixtureSettings(BaseModel):
+    """Per-fixture settings applied to the fixture's Bublik project."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trackers: list[TrackerSpec] | None = Field(
+        default=None,
+        description=(
+            "Issue trackers to configure, in order; the first is the UI's "
+            "default tracker. An empty list configures none. Omitted, the "
+            "project gets the single default E2E_BUGS tracker."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _unique_tracker_ids(self) -> "FixtureSettings":
+        ids = [tracker.id for tracker in self.trackers or []]
+        duplicates = sorted({id_ for id_ in ids if ids.count(id_) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate tracker id {', '.join(duplicates)}")
+        return self
+
+
 class ClassificationSpec(BaseModel):
     """Pinned leaves plus the issues and rules written against them."""
 
@@ -191,6 +235,13 @@ class Plan(BaseModel):
             "are absolute counts (3) or shares of the run ('20%')."
         ),
     )
+    fixtures: dict[str, FixtureSettings] = Field(
+        default_factory=dict,
+        description=(
+            "Per-fixture settings, keyed by fixture name. A fixture left out "
+            "keeps the defaults."
+        ),
+    )
     classification: ClassificationSpec | None = Field(
         default=None,
         description=(
@@ -220,6 +271,25 @@ class Plan(BaseModel):
             f"{day.isoformat()}:{_render_day(spec)}"
             for day, spec in sorted(self.days.items())
         ]
+
+    def tracker_spec(self) -> dict[str, list[dict[str, str]]]:
+        """Trackers per fixture, for the fixtures that declare them.
+
+        A fixture absent here gets the default tracker; one mapped to an empty
+        list gets none.
+        """
+        return {
+            fixture: [
+                {
+                    "id": tracker.id,
+                    "name": tracker.name or tracker.id,
+                    "uri": tracker.uri,
+                }
+                for tracker in settings.trackers
+            ]
+            for fixture, settings in self.fixtures.items()
+            if settings.trackers is not None
+        }
 
     def classification_spec(self) -> dict[str, Any] | None:
         """Render the classification section as the plain mapping core expects.

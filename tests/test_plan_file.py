@@ -303,6 +303,7 @@ def test_schema_kind_plan_is_exportable() -> None:
         "runs",
         "mixes",
         "days",
+        "fixtures",
         "classification",
     }
     assert "days" in schema["required"]

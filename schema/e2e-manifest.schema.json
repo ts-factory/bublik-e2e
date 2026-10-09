@@ -940,6 +940,33 @@
       ],
       "type": "object"
     },
+    "Project": {
+      "additionalProperties": false,
+      "description": "A Bublik project the fixtures land in, as --setup-projects configures it.",
+      "properties": {
+        "fixtures": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "trackers": {
+          "items": {
+            "$ref": "#/$defs/Tracker"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "fixtures",
+        "trackers"
+      ],
+      "type": "object"
+    },
     "ReportConfig": {
       "additionalProperties": false,
       "description": "A UI report config bundled into the manifest. ``content`` is free-form.",
@@ -1016,6 +1043,27 @@
         "name"
       ],
       "type": "object"
+    },
+    "Tracker": {
+      "additionalProperties": false,
+      "description": "An issue tracker, configured under ISSUES in a project's references config.\n\n``id`` is the TRACKER of a ``ref://TRACKER/KEY`` bug key; a key whose\ntracker is not configured in its project has no external link.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "uri"
+      ],
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -1064,6 +1112,12 @@
     },
     "importUrl": {
       "type": "string"
+    },
+    "projects": {
+      "items": {
+        "$ref": "#/$defs/Project"
+      },
+      "type": "array"
     },
     "uiBaseUrl": {
       "type": "string"

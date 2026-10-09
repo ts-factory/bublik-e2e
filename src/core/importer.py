@@ -38,6 +38,7 @@ from core.manifest import generate_manifest
 from core.manifest_models import Manifest
 from core.settings import Settings, resolve_manifest
 from core.summary import build_run_table, build_timing_summary, format_duration
+from core.trackers import DEFAULT_TRACKERS, references_issues
 
 # Manifest keys whose values embed the instance base URL (used when retargeting
 # an import at a different host than the manifest was generated against).
@@ -467,16 +468,15 @@ def ensure_api_projects(
     projects = curl_json(f"{base_url}/api/v2/projects/", cookie_jar=cookie_jar)
     projects_by_name = {project["name"]: project for project in projects}
     project_names = sorted({bundle["project"] for bundle in manifest["bundles"]})
+    # A manifest from before trackers were configurable has no "projects";
+    # every project then gets the default trackers, as it always did.
+    trackers_by_project = {
+        project["name"]: project["trackers"] for project in manifest.get("projects", [])
+    }
     configs_by_project: dict[str, list[dict[str, Any]]] = {}
     for config in manifest.get("configs", []):
         configs_by_project.setdefault(config["project"], []).append(config)
     references = {
-        "ISSUES": {
-            "E2E_BUGS": {
-                "uri": "https://bugs.example.invalid/issue/",
-                "name": "E2E Bug Tracker",
-            }
-        },
         "REVISIONS": {
             "TE_REV": {
                 "uri": "https://github.com/ts-factory/test-environment",
@@ -596,7 +596,12 @@ def ensure_api_projects(
             config_type="global",
             name="references",
             description="E2E fixture logs references",
-            content=references,
+            content={
+                "ISSUES": references_issues(
+                    trackers_by_project.get(project_name, list(DEFAULT_TRACKERS))
+                ),
+                **references,
+            },
             project_id=project["id"],
         )
 

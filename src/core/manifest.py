@@ -43,6 +43,7 @@ from core.run_log_schema import (
 )
 from core.settings import Settings, resolve_manifest
 from core.summary import render_run_summary
+from core.trackers import project_trackers
 
 REVISION_SUFFIXES = {"_GIT_URL": "url", "_BRANCH": "branch", "_REV": "rev"}
 
@@ -388,6 +389,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
     fixtures = selected_fixtures(args)
     mixes = build_mixes(args)
     classification = build_classification(getattr(args, "classification", None))
+    projects = project_trackers(fixtures, getattr(args, "trackers", None) or {})
     planned_runs, empty_dates = build_plan(args, fixtures, mixes)
     bundles: list[dict[str, Any]] = []
     publication_dir = (
@@ -518,6 +520,7 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
             "importUrl": f"{logs_base}/{urllib.parse.quote(seg)}/",
             "emptyDates": sorted(set(empty_dates)),
             "configs": configs,
+            "projects": projects,
             "classification": classification_manifest(classification, bundles),
             "bundles": bundles,
         }
