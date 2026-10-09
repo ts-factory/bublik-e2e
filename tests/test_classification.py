@@ -428,7 +428,7 @@ def test_an_omitted_expected_takes_the_category_default() -> None:
 
 def test_plan_file_keeps_an_explicit_null_expected(tmp_path: Path) -> None:
     """End to end: YAML `expected: null` must reach the domain as None."""
-    from core.plan_file import load_plan_file
+    from core.plan_file import load_plan
 
     path = tmp_path / "plan.yaml"
     path.write_text(
@@ -459,8 +459,7 @@ days:
         encoding="utf-8",
     )
 
-    _, _, _, classification = load_plan_file(path)
-    plan = build_classification(classification)
+    plan = build_classification(load_plan(path).classification_spec())
 
     by_id = {rule.id: rule for rule in plan.rules}
     assert by_id["marked"].disposition() is None
@@ -890,7 +889,7 @@ def test_an_issue_with_rules_derives_its_fixture() -> None:
 
 
 def test_plan_file_accepts_a_rule_less_issue(tmp_path: Path) -> None:
-    from core.plan_file import load_plan_file
+    from core.plan_file import load_plan
 
     path = tmp_path / "plan.yaml"
     path.write_text(
@@ -908,8 +907,7 @@ days:
         encoding="utf-8",
     )
 
-    _, _, _, classification = load_plan_file(path)
-    plan = build_classification(classification)
+    plan = build_classification(load_plan(path).classification_spec())
 
     assert plan.issue_by_id("lonely").fixture == "net-drv-ts"
     assert plan.rules == ()
@@ -921,7 +919,7 @@ days:
 
 
 def test_plan_file_carries_a_rules_active_flag(tmp_path: Path) -> None:
-    from core.plan_file import load_plan_file
+    from core.plan_file import load_plan
 
     path = tmp_path / "plan.yaml"
     path.write_text(
@@ -948,8 +946,7 @@ days:
         encoding="utf-8",
     )
 
-    _, _, _, classification = load_plan_file(path)
-    plan = build_classification(classification)
+    plan = build_classification(load_plan(path).classification_spec())
 
     by_id = {rule.id: rule for rule in plan.rules}
     assert by_id["paused"].active is False

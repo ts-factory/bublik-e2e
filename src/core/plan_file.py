@@ -1,4 +1,4 @@
-"""Read a plan file into the ``--runs``/``--mix``/``--day`` option values.
+"""Read and validate a plan file.
 
 Plans are YAML (JSON is valid YAML, so a ``.json`` plan still loads). YAML is
 what makes a campaign readable: one run group per line, and comments explaining
@@ -77,16 +77,3 @@ def load_plan(path: Path) -> Plan:
         return Plan.model_validate(raw)
     except ValidationError as exc:
         raise CliError(_format_errors(path, exc)) from exc
-
-
-def load_plan_file(
-    path: Path,
-) -> tuple[int | None, list[str], list[str], dict | None]:
-    """Read ``path`` and return ``(runs, mix_entries, day_entries, classification)``."""
-    plan = load_plan(path)
-    return (
-        plan.runs,
-        plan.mix_options(),
-        plan.day_options(),
-        plan.classification_spec(),
-    )

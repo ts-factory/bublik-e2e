@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 from cli import app
 from core.common import CliError
 from core.discovery import discover_fixtures
-from core.plan_file import load_plan, load_plan_file
+from core.plan_file import load_plan
 
 runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -54,7 +54,7 @@ days:
 """,
         "string.yaml",
     )
-    assert load_plan_file(as_list) == load_plan_file(as_string)
+    assert load_plan(as_list).day_options() == load_plan(as_string).day_options()
 
 
 def test_mixes_accept_a_mapping_or_a_string(tmp_path: Path) -> None:
@@ -84,8 +84,8 @@ days:
 """,
         "string.yaml",
     )
-    assert load_plan_file(as_mapping) == load_plan_file(as_string)
-    assert load_plan_file(as_mapping)[1] == [
+    assert load_plan(as_mapping).mix_options() == load_plan(as_string).mix_options()
+    assert load_plan(as_mapping).mix_options() == [
         "warn:unexpectedFailed=20%,expectedKilled=1"
     ]
 
@@ -97,7 +97,11 @@ def test_json_plans_still_load(tmp_path: Path) -> None:
         json.dumps({"version": 1, "days": {"2026-04-20": "basic.ok=1"}}),
         encoding="utf-8",
     )
-    assert load_plan_file(path) == (None, [], ["2026-04-20:basic.ok=1"], None)
+    plan = load_plan(path)
+    assert plan.runs is None
+    assert plan.mix_options() == []
+    assert plan.day_options() == ["2026-04-20:basic.ok=1"]
+    assert plan.classification_spec() is None
 
 
 def test_days_are_emitted_oldest_first(tmp_path: Path) -> None:
@@ -112,7 +116,7 @@ days:
     - basic.ok=1
 """,
     )
-    _, _, days, _ = load_plan_file(path)
+    days = load_plan(path).day_options()
     assert days == ["2026-04-20:basic.ok=1", "2026-04-22:basic.ok=1"]
 
 
@@ -127,7 +131,7 @@ days:
     - basic.ok=1
 """,
     )
-    _, _, days, _ = load_plan_file(path)
+    days = load_plan(path).day_options()
     assert days == ["2026-04-19:", "2026-04-20:basic.ok=1"]
 
 
