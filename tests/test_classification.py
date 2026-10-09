@@ -913,6 +913,55 @@ days:
     assert plan.rules == ()
 
 
+@pytest.mark.parametrize("command", ["plan", "generate"])
+def test_a_rule_less_issue_in_an_unknown_fixture_fails_at_plan_time(
+    tmp_path: Path, command: str
+) -> None:
+    """A typo in the fixture is caught before anything is generated or seeded."""
+    from typer.testing import CliRunner
+
+    from cli import app
+
+    path = tmp_path / "plan.yaml"
+    path.write_text(
+        """
+version: 1
+classification:
+  issues:
+    - id: lonely
+      title: Lonely
+      fixture: net-drv
+days:
+  2026-04-20:
+    - net-drv-ts.ok=1
+""",
+        encoding="utf-8",
+    )
+    schema = tmp_path / "schema.json"
+    schema.write_text('{"type": "object"}', encoding="utf-8")
+    extra = {
+        "plan": [],
+        "generate": [
+            "--publish-dir",
+            str(tmp_path / "publish"),
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--run-log-schema",
+            str(schema),
+            "--meta-data-schema",
+            str(schema),
+        ],
+    }[command]
+
+    result = CliRunner().invoke(app, [command, "--plan", str(path), *extra])
+
+    assert result.exit_code == 1, result.output
+    assert "issue 'lonely' names unknown fixture 'net-drv'" in " ".join(
+        result.output.split()
+    )
+    assert not (tmp_path / "manifest.json").exists()
+
+
 # --------------------------------------------------------------------------
 # Rules created and then deactivated
 # --------------------------------------------------------------------------

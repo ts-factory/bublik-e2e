@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from core.common import CliError
-from core.discovery import discover_fixtures
+from core.discovery import known_fixture_names
 
 #: What every project got before trackers were configurable, and what a fixture
 #: the plan says nothing about still gets.
@@ -37,7 +37,7 @@ def project_trackers(
     """
     unselected = set(spec) - set(fixtures)
     if unselected:
-        known = set(fixtures) | set(discover_fixtures())
+        known = known_fixture_names(fixtures)
         unknown = sorted(unselected - known)
         if unknown:
             raise CliError(

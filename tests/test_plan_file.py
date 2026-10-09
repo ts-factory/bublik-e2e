@@ -240,6 +240,26 @@ def test_plan_command_rejects_an_unknown_grouping(tmp_path: Path) -> None:
     assert "--by must be one of" in visible_output(result.output)
 
 
+def test_plan_command_validates_the_classification_section(tmp_path: Path) -> None:
+    """Checking a plan needs no stack, so its cross-references are checked here."""
+    path = write_plan(
+        tmp_path,
+        """
+version: 1
+classification:
+  issues:
+    - id: lonely
+      title: Lonely
+days:
+  2026-04-20:
+    - basic.ok=1
+""",
+    )
+    result = runner.invoke(app, ["plan", "--plan", str(path)])
+    assert result.exit_code == 1
+    assert "issue 'lonely' has no rules" in visible_output(result.output)
+
+
 def test_declared_run_count_is_asserted(tmp_path: Path) -> None:
     """The plan's `runs:` is the guard rail against an accidental edit."""
     path = write_plan(

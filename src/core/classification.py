@@ -25,7 +25,7 @@ which runs are seeded first (``api``) and which are held back (``+ui``).
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Collection
 
 from core.common import CliError
 from core.constants import RESULT_TYPES, RUN_STATUS_BY_CONCLUSION
@@ -183,11 +183,14 @@ def _unique_ids(items: list[dict[str, Any]], kind: str) -> None:
         seen.add(str(item_id))
 
 
-def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
+def build_classification(
+    raw: dict[str, Any] | None, known_fixtures: Collection[str] | None = None
+) -> ClassificationPlan:
     """Validate the plan's ``classification:`` mapping into a domain object.
 
     The shape is already checked by the plan model; this resolves the
     cross-references between rules, issues and pins, which the shape cannot.
+    With ``known_fixtures``, every fixture a pin or issue names must be one.
     """
     if not raw:
         return ClassificationPlan()
@@ -359,6 +362,21 @@ def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
             )
         resolved.append(replace(issue, fixture=issue.fixture or derived))
     plan.issues = tuple(resolved)
+
+    if known_fixtures is not None:
+        known = ", ".join(sorted(known_fixtures))
+        for pin in plan.pins:
+            _require(
+                pin.fixture in known_fixtures,
+                f"pin {pin.id!r} names unknown fixture {pin.fixture!r}; "
+                f"known fixtures: {known}",
+            )
+        for issue in plan.issues:
+            _require(
+                issue.fixture in known_fixtures,
+                f"issue {issue.id!r} names unknown fixture {issue.fixture!r}; "
+                f"known fixtures: {known}",
+            )
 
     return plan
 

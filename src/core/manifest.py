@@ -31,7 +31,7 @@ from core.constants import (
     NOK_BORDERS,
     RUN_STATUS_BY_CONCLUSION,
 )
-from core.discovery import selected_fixtures
+from core.discovery import known_fixture_names, selected_fixtures
 from core.manifest_models import Manifest
 from core.classification import build_classification, classification_manifest
 from core.planning import build_mixes, build_plan
@@ -388,7 +388,9 @@ def generate_manifest(args: argparse.Namespace, *, show_summary: bool = True) ->
     log_url_template = settings.log_url_template
     fixtures = selected_fixtures(args)
     mixes = build_mixes(args)
-    classification = build_classification(getattr(args, "classification", None))
+    classification = build_classification(
+        getattr(args, "classification", None), known_fixture_names(fixtures)
+    )
     projects = project_trackers(fixtures, getattr(args, "trackers", None) or {})
     planned_runs, empty_dates = build_plan(args, fixtures, mixes)
     bundles: list[dict[str, Any]] = []

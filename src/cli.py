@@ -19,8 +19,9 @@ from typing import Annotated, Callable, List, Optional
 import typer
 from rich.table import Table
 
+from core.classification import build_classification
 from core.common import CliError, console
-from core.discovery import selected_fixtures
+from core.discovery import known_fixture_names, selected_fixtures
 from core.importer import generate_and_import, import_manifest
 from core.live import simulate_live_run
 from core.manifest import generate_manifest
@@ -583,7 +584,7 @@ def plan(
             f"[bold red]error:[/] --by must be one of: {', '.join(sorted(groups))}"
         )
         raise typer.Exit(code=1)
-    runs, day, mix, _, trackers = _plan_or_exit(plan, runs, day, None, mix)
+    runs, day, mix, classification, trackers = _plan_or_exit(plan, runs, day, None, mix)
     try:
         args = argparse.Namespace(
             fixture=fixture or [], runs=runs, day=day, fill=None, dates=None, mix=mix
@@ -591,6 +592,7 @@ def plan(
         fixtures = selected_fixtures(args)
         mixes = build_mixes(args)
         planned, empty_dates = build_plan(args, fixtures, mixes)
+        build_classification(classification, known_fixture_names(fixtures))
         project_trackers(fixtures, trackers)
     except CliError as exc:
         console.print(f"[bold red]error:[/] {exc}", soft_wrap=True)

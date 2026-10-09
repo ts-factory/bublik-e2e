@@ -12,6 +12,7 @@ import argparse
 import importlib.util
 from importlib.metadata import entry_points
 from pathlib import Path
+from typing import Mapping
 
 from core.common import CliError, sanitize_path_part
 from core.fixture_api import FixtureProvider
@@ -60,6 +61,14 @@ def discover_fixtures() -> dict[str, FixtureProvider]:
             raise CliError(f"duplicate fixture name {fixture.name!r}")
         selected[fixture.name] = fixture
     return selected
+
+
+def known_fixture_names(selected: Mapping[str, FixtureProvider]) -> set[str]:
+    """Names a plan may refer to: the selection plus every bundled fixture.
+
+    A plan written for the whole campaign stays valid under ``--fixture``.
+    """
+    return set(selected) | set(discover_fixtures())
 
 
 def selected_fixtures(args: argparse.Namespace) -> dict[str, FixtureProvider]:
