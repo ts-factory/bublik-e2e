@@ -311,10 +311,14 @@ class ClassificationIssue(_Model):
     description: str | None
     key: str | None
     close: bool
+    #: The fixture whose project the issue belongs to: named by the plan for
+    #: an issue without rules, otherwise the fixture its rules' pins live in.
+    #: Always written now; optional so a manifest from before it still applies.
+    fixture: str | None = None
     issueId: int | None = None
     #: The Bublik project the issue was created in, also filled by
     #: --setup-classification. An issue belongs to exactly one project; which
-    #: one follows from the fixture its rules' pins live in.
+    #: one follows from ``fixture``.
     projectId: int | None = None
     projectName: str | None = None
 
@@ -335,6 +339,11 @@ class ClassificationRule(_Model):
     expected: bool | None
     scope: Literal["future", "oneoff"]
     match: list[ClassificationMatchDimension]
+    #: false when --setup-classification deactivates the rule after creating
+    #: it, on an issue left open. A rule on a closed issue is inactive too,
+    #: but through the close, and keeps ``active: true`` here. Absent in a
+    #: manifest from before the field, which means true.
+    active: bool = True
     ruleId: int | None = None
     #: Result ids the rule was created from, once it has been applied.
     classifiedResultIds: list[int] = Field(default_factory=list)

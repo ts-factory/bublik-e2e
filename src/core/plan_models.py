@@ -96,6 +96,14 @@ class IssueSpecModel(BaseModel):
             "rules and lifts suppression — the 'stale classification' state."
         ),
     )
+    fixture: str | None = Field(
+        default=None,
+        description=(
+            "Fixture whose project the issue belongs to. Required for an issue "
+            "with no rules, which is created directly; otherwise it follows "
+            "from the rules' pins and, when given, must agree with them."
+        ),
+    )
     rules: list[NestedRuleSpec] = Field(
         default_factory=list,
         description=(
@@ -127,6 +135,13 @@ class NestedRuleSpec(BaseModel):
     )
     scope: str = Field(default="future")
     match: list[str] = Field(default_factory=list)
+    active: bool = Field(
+        default=True,
+        description=(
+            "false deactivates the rule right after it is created, on an open "
+            "issue: the rule exists but stamps nothing new."
+        ),
+    )
 
 
 class RuleSpecModel(BaseModel):
@@ -155,6 +170,13 @@ class RuleSpecModel(BaseModel):
             "Matcher dimensions to keep beyond the test, which is always "
             "matched: any of parameters, verdicts, tags. Empty is a test-only "
             "rule, matching every iteration of that test."
+        ),
+    )
+    active: bool = Field(
+        default=True,
+        description=(
+            "false deactivates the rule right after it is created, on an open "
+            "issue: the rule exists but stamps nothing new."
         ),
     )
 

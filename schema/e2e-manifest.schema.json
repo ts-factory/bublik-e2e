@@ -186,6 +186,17 @@
             }
           ]
         },
+        "fixture": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "id": {
           "type": "string"
         },
@@ -353,6 +364,10 @@
       "additionalProperties": false,
       "description": "A rule the plan declares. ``ruleId`` is filled by --setup-classification.\n\n``match`` lists the matcher dimensions kept beyond the test, which is always\nmatched. An empty list is a test-only rule: it matches every iteration of\nthat test, in every run of the project.",
       "properties": {
+        "active": {
+          "default": true,
+          "type": "boolean"
+        },
         "category": {
           "enum": [
             "product-defect",

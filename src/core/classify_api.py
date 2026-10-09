@@ -139,6 +139,49 @@ def _seeded_bundle(
     )
 
 
+def _project_of(
+    manifest: dict[str, Any],
+    issue: dict[str, Any],
+    base_url: str,
+    cookie_jar: Path,
+    fetch: Any,
+    projects: dict[str, int],
+) -> int:
+    """The id of the project an issue's fixture imports into.
+
+    A rule-less issue has no result to borrow a project from, so the name comes
+    from a bundle of its fixture and the id from ``/projects/``, fetched once.
+    """
+    if not issue.get("fixture"):
+        # Only a manifest written before issues carried a fixture lacks one.
+        raise CliError(
+            f"issue {issue['id']!r} has no rules and no fixture, so nothing names "
+            "its project; regenerate the manifest from a plan that gives it one"
+        )
+    name = next(
+        (
+            bundle["project"]
+            for bundle in manifest.get("bundles", [])
+            if bundle.get("fixture") == issue["fixture"]
+        ),
+        None,
+    )
+    if name is None:
+        raise CliError(
+            f"issue {issue['id']!r} names fixture {issue['fixture']!r}, which no "
+            "bundle in the manifest imports, so it has no project to belong to"
+        )
+    if not projects:
+        listed = fetch(f"{base_url}/api/v2/projects/", cookie_jar=cookie_jar)
+        projects.update({project["name"]: int(project["id"]) for project in listed})
+    if name not in projects:
+        raise CliError(
+            f"issue {issue['id']!r}: project {name!r} does not exist in the "
+            "instance; import its fixture's runs first"
+        )
+    return projects[name]
+
+
 def apply_classification(
     manifest: dict[str, Any],
     manifest_path: Path,
@@ -163,6 +206,35 @@ def apply_classification(
     # Several issues commonly share one pin, and every lookup is a whole-test
     # query, so hold the responses for the duration of the run.
     lookups: dict[str, Any] = {}
+
+    # An issue with no rules has no result to classify, so nothing creates it
+    # as a side effect: it goes through the issues endpoint directly, with the
+    # same unique-together fields the classify payload carries.
+    with_rules = {rule["issue"] for rule in rules}
+    projects: dict[str, int] = {}
+    for issue in issues.values():
+        if issue["id"] in with_rules or issue.get("issueId"):
+            continue
+        payload = {
+            "title": issue["title"],
+            "bug_key": issue.get("key") or None,
+            "project": _project_of(
+                manifest, issue, base_url, cookie_jar, fetch, projects
+            ),
+        }
+        if issue.get("description"):
+            payload["description"] = issue["description"]
+        created = fetch(
+            f"{base_url}/api/v2/issues/",
+            method="POST",
+            payload=payload,
+            cookie_jar=cookie_jar,
+        )
+        issue["issueId"] = int(created["id"])
+        issue["projectId"] = int(created["project"])
+        issue["projectName"] = created["project_name"]
+        created_issues += 1
+        write_json(manifest_path, manifest, True)
 
     for rule in rules:
         if rule.get("ruleId"):
@@ -238,6 +310,25 @@ def apply_classification(
         # duplicate. Writing as we go makes a failed run resumable instead.
         write_json(manifest_path, manifest, True)
 
+    # A rule the plan wants inactive is created like any other and then
+    # deactivated, so it exists on an open issue without stamping anything new.
+    # Like closing, this is a collection action that counts what it moved, so a
+    # re-run sends the same ids and reports nothing done.
+    to_deactivate = [
+        rule["ruleId"]
+        for rule in rules
+        if rule.get("active") is False and rule.get("ruleId")
+    ]
+    deactivated = 0
+    if to_deactivate:
+        summary = fetch(
+            f"{base_url}/api/v2/issue_rules/deactivate/",
+            method="POST",
+            payload={"ids": to_deactivate},
+            cookie_jar=cookie_jar,
+        )
+        deactivated = int(summary.get("updated") or 0)
+
     # Closing happens last: it deactivates the issue's rules, so a rule created
     # after the close would be silently inert.
     #
@@ -266,6 +357,8 @@ def apply_classification(
         parts.append(f"created {created_issues} issues")
     if created_rules:
         parts.append(f"created {created_rules} rules")
+    if deactivated:
+        parts.append(f"deactivated {deactivated} rules")
     if closed:
         parts.append(f"closed {closed}")
     if not parts:

@@ -396,6 +396,41 @@ dozens of issues:
         - {pin: rx-mode-timeout, category: product-defect, expected: false, match: [verdicts]}
 ```
 
+Two more shapes cover states that classifying a result never produces on its
+own: an issue nobody has classified anything into yet, and a rule that exists
+on an open issue but has been switched off.
+
+```yaml
+  issues:
+    - id: untriaged-crash          # no rules: created directly, so name its fixture
+      title: "Driver crash on unload, not yet triaged"
+      key: ref://E2E_BUGS/E2E-140
+      fixture: net-drv-ts
+    - id: rx-timeout
+      title: "RX mode negotiation times out on this NIC"
+      rules:
+        - {pin: rx-mode-timeout, match: []}
+        - {pin: rx-mode-timeout, match: [verdicts], active: false}   # paused
+```
+
+`fixture` names the project an issue belongs to. It is required on an issue
+without rules, which `--setup-classification` creates through
+`POST /api/v2/issues/` in the project the fixture's bundles import into. On an
+issue with rules it is optional and, when given, must match the fixture of the
+rules' pins. The manifest records the resolved `fixture` on every issue.
+
+`active` defaults to `true`. A rule with `active: false` is created by
+classifying its pin like any other, then switched off through
+`POST /api/v2/issue_rules/deactivate/`, so it stays on an open issue and stamps
+nothing new. It is rejected on a `oneoff` rule, which is created inactive, and
+under an issue with `close: true`, whose close deactivates every rule anyway.
+The manifest records `active` on every rule.
+
+`--setup-classification` works in this order: rule-less issues, then rules,
+then deactivation, then closing. Re-running it creates nothing; deactivation and
+closing are collection actions, so a re-run sends the same ids and the backend
+reports them unchanged.
+
 ## Live import simulation
 
 A real Test Environment streams a run into Bublik while it executes: `POST

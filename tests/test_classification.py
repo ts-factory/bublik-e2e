@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import ANY
 
 import pytest
 
@@ -288,7 +289,7 @@ def test_the_manifest_carries_an_issue_description() -> None:
         _plan(
             issues=[
                 {"id": "known", "title": "Known", "description": "**Bad** thing.\n"},
-                {"id": "bare", "title": "Bare"},
+                {"id": "bare", "title": "Bare", "fixture": "net-drv-ts"},
             ]
         )
     )
@@ -840,3 +841,348 @@ def test_a_pin_authoring_no_verdicts_skips_the_check() -> None:
     result = find_result("http://host", 7, record, Path("jar"), _stale_fetch([]))
 
     assert result["result_id"] == 5
+
+
+# --------------------------------------------------------------------------
+# Issues without rules
+# --------------------------------------------------------------------------
+
+
+def test_an_issue_without_rules_needs_a_fixture() -> None:
+    """Its project would otherwise follow from nothing."""
+    with pytest.raises(CliError, match="issue 'lonely' has no rules"):
+        build_classification(
+            _plan(
+                issues=[
+                    {"id": "known", "title": "Known"},
+                    {"id": "lonely", "title": "Lonely"},
+                ]
+            )
+        )
+
+
+def test_an_issue_without_rules_takes_its_fixture_from_the_plan() -> None:
+    plan = build_classification(
+        _plan(
+            issues=[
+                {"id": "known", "title": "Known"},
+                {"id": "lonely", "title": "Lonely", "fixture": "dpdk-ethdev-ts"},
+            ]
+        )
+    )
+
+    assert plan.issue_by_id("lonely").fixture == "dpdk-ethdev-ts"
+
+
+def test_an_issue_fixture_must_agree_with_its_rules() -> None:
+    with pytest.raises(CliError, match="issue 'known' names fixture 'dpdk-ethdev-ts'"):
+        build_classification(
+            _plan(
+                issues=[{"id": "known", "title": "Known", "fixture": "dpdk-ethdev-ts"}]
+            )
+        )
+
+
+def test_an_issue_with_rules_derives_its_fixture() -> None:
+    plan = build_classification(_plan())
+
+    assert plan.issue_by_id("known").fixture == "net-drv-ts"
+
+
+def test_plan_file_accepts_a_rule_less_issue(tmp_path: Path) -> None:
+    from core.plan_file import load_plan_file
+
+    path = tmp_path / "plan.yaml"
+    path.write_text(
+        """
+version: 1
+classification:
+  issues:
+    - id: lonely
+      title: Lonely
+      fixture: net-drv-ts
+days:
+  2026-04-20:
+    - net-drv-ts.ok=1
+""",
+        encoding="utf-8",
+    )
+
+    _, _, _, classification = load_plan_file(path)
+    plan = build_classification(classification)
+
+    assert plan.issue_by_id("lonely").fixture == "net-drv-ts"
+    assert plan.rules == ()
+
+
+# --------------------------------------------------------------------------
+# Rules created and then deactivated
+# --------------------------------------------------------------------------
+
+
+def test_plan_file_carries_a_rules_active_flag(tmp_path: Path) -> None:
+    from core.plan_file import load_plan_file
+
+    path = tmp_path / "plan.yaml"
+    path.write_text(
+        """
+version: 1
+classification:
+  pins:
+    - id: rx
+      fixture: net-drv-ts
+      test: rx_mode
+  issues:
+    - id: known
+      title: Known
+      rules:
+        - id: paused
+          pin: rx
+          active: false
+        - id: live
+          pin: rx
+days:
+  2026-04-20:
+    - net-drv-ts.ok=1
+""",
+        encoding="utf-8",
+    )
+
+    _, _, _, classification = load_plan_file(path)
+    plan = build_classification(classification)
+
+    by_id = {rule.id: rule for rule in plan.rules}
+    assert by_id["paused"].active is False
+    assert by_id["live"].active is True
+
+
+def test_an_inactive_oneoff_rule_is_rejected() -> None:
+    """A oneoff rule is created inactive, so there is nothing to deactivate."""
+    with pytest.raises(CliError, match="rule 'r1' is oneoff"):
+        build_classification(
+            _plan(
+                rules=[
+                    {
+                        "id": "r1",
+                        "issue": "known",
+                        "pin": "rx",
+                        "scope": "oneoff",
+                        "active": False,
+                    }
+                ]
+            )
+        )
+
+
+def test_an_inactive_rule_on_a_closed_issue_is_rejected() -> None:
+    """Closing deactivates every rule; the flag is for rules on open issues."""
+    with pytest.raises(CliError, match="rule 'r1' .* issue 'known' closes"):
+        build_classification(
+            _plan(
+                issues=[{"id": "known", "title": "Known", "close": True}],
+                rules=[{"id": "r1", "issue": "known", "pin": "rx", "active": False}],
+            )
+        )
+
+
+# --------------------------------------------------------------------------
+# What the manifest records for both
+# --------------------------------------------------------------------------
+
+
+def test_the_manifest_records_issue_fixtures_and_rule_activity() -> None:
+    from core.manifest_models import ClassificationManifest
+
+    plan = build_classification(
+        _plan(
+            issues=[
+                {"id": "known", "title": "Known"},
+                {"id": "lonely", "title": "Lonely", "fixture": "dpdk-ethdev-ts"},
+            ],
+            rules=[
+                {"id": "r1", "issue": "known", "pin": "rx"},
+                {"id": "r2", "issue": "known", "pin": "rx", "active": False},
+            ],
+        )
+    )
+    bundles = [{"id": "seed", "importVia": "api", "pinnedResults": [{"pin": "rx"}]}]
+
+    rendered = classification_manifest(plan, bundles)
+
+    issues = {issue["id"]: issue for issue in rendered["issues"]}
+    assert issues["known"]["fixture"] == "net-drv-ts"
+    assert issues["lonely"]["fixture"] == "dpdk-ethdev-ts"
+    assert [rule["active"] for rule in rendered["rules"]] == [True, False]
+    ClassificationManifest.model_validate(rendered)
+
+
+# --------------------------------------------------------------------------
+# Applying rule-less issues and inactive rules
+# --------------------------------------------------------------------------
+
+
+def _shapes_manifest(tmp_path: Path) -> tuple[dict, Path]:
+    """One rule-less issue and one rule deactivated after it exists."""
+    manifest, path = _classify_manifest(tmp_path)
+    manifest["bundles"][0]["fixture"] = "net-drv-ts"
+    manifest["bundles"][0]["project"] = "tsf/net-drv"
+    classification = manifest["classification"]
+    classification["issues"] = [
+        {"id": "known", "title": "Known", "close": False, "fixture": "net-drv-ts"},
+        {
+            "id": "lonely",
+            "title": "Lonely",
+            "description": "Nobody classified anything into this yet.",
+            "key": "ref://E2E_BUGS/E2E-900",
+            "close": False,
+            "fixture": "net-drv-ts",
+        },
+    ]
+    classification["rules"][0]["active"] = False
+    return manifest, path
+
+
+class _Instance:
+    """A fake fetch that hands out ids and records every request."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, object]] = []
+        # Collection actions count only what they move, like the backend's.
+        self.moved: set[tuple[str, int]] = set()
+
+    def __call__(
+        self, url: str, *, method: str = "GET", payload: dict | None = None, **_: object
+    ) -> object:
+        self.calls.append((method, url.removeprefix("http://host"), payload))
+        if url.endswith("/api/v2/projects/"):
+            return [{"id": 4, "name": "tsf/other"}, {"id": 5, "name": "tsf/net-drv"}]
+        if "results/?" in url:
+            return {"results": [_row(42, project_id=5)]}
+        if url.endswith("/classify/"):
+            return {"issue_id": 3, "rule_id": 9}
+        if url.endswith("/api/v2/issues/") and method == "POST":
+            return {"id": 11, "project": 5, "project_name": "tsf/net-drv"}
+        if url.endswith("/deactivate/") or url.endswith("/close/"):
+            ids = [(url, i) for i in (payload or {})["ids"]]
+            updated = [key for key in ids if key not in self.moved]
+            self.moved.update(updated)
+            return {"requested": len(ids), "updated": len(updated)}
+        return {}
+
+    def posts(self) -> list[tuple[str, object]]:
+        return [
+            (url, payload) for method, url, payload in self.calls if method == "POST"
+        ]
+
+
+def test_a_rule_less_issue_is_created_in_its_fixtures_project(tmp_path: Path) -> None:
+    from core.classify_api import apply_classification
+
+    manifest, path = _shapes_manifest(tmp_path)
+    instance = _Instance()
+    apply_classification(manifest, path, "http://host", Path("jar"), instance)
+
+    assert (
+        "/api/v2/issues/",
+        {
+            "title": "Lonely",
+            "description": "Nobody classified anything into this yet.",
+            "bug_key": "ref://E2E_BUGS/E2E-900",
+            "project": 5,
+        },
+    ) in instance.posts()
+    lonely = read_json(path)["classification"]["issues"][1]
+    assert (lonely["issueId"], lonely["projectId"], lonely["projectName"]) == (
+        11,
+        5,
+        "tsf/net-drv",
+    )
+
+
+def test_setup_creates_then_deactivates_then_closes(tmp_path: Path) -> None:
+    """Deactivating needs the rule to exist; closing stays the last word."""
+    from core.classify_api import apply_classification
+
+    manifest, path = _shapes_manifest(tmp_path)
+    manifest["classification"]["issues"][1]["close"] = True
+    instance = _Instance()
+    apply_classification(manifest, path, "http://host", Path("jar"), instance)
+
+    assert instance.posts() == [
+        ("/api/v2/issues/", ANY),
+        ("/api/v2/results/42/classify/", ANY),
+        ("/api/v2/issue_rules/deactivate/", {"ids": [9]}),
+        ("/api/v2/issues/close/", {"ids": [11]}),
+    ]
+
+
+def test_a_re_run_creates_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from core.classify_api import apply_classification
+
+    manifest, path = _shapes_manifest(tmp_path)
+    instance = _Instance()
+    apply_classification(manifest, path, "http://host", Path("jar"), instance)
+    capsys.readouterr()
+    first = len(instance.calls)
+
+    apply_classification(read_json(path), path, "http://host", Path("jar"), instance)
+
+    rerun = [url for _, url, _ in instance.calls[first:]]
+    assert rerun == ["/api/v2/issue_rules/deactivate/"]
+    assert "already applied" in capsys.readouterr().err
+
+
+def test_a_rule_less_issue_in_an_unimported_fixture_is_named(tmp_path: Path) -> None:
+    from core.classify_api import apply_classification
+
+    manifest, path = _shapes_manifest(tmp_path)
+    manifest["classification"]["issues"][1]["fixture"] = "dpdk-ethdev-ts"
+
+    with pytest.raises(CliError, match="issue 'lonely' names fixture 'dpdk-ethdev-ts'"):
+        apply_classification(manifest, path, "http://host", Path("jar"), _Instance())
+
+
+def test_a_manifest_from_before_both_fields_still_validates_and_applies(
+    tmp_path: Path,
+) -> None:
+    """`task e2e:seed` on a seeded stack applies the manifest it already has."""
+    from core.classify_api import apply_classification
+    from core.manifest_models import ClassificationManifest
+
+    manifest, path = _classify_manifest(tmp_path)
+    classification = manifest["classification"]
+    classification["pins"] = [
+        {
+            "id": "rx",
+            "fixture": "net-drv-ts",
+            "test": "rx_mode",
+            "status": "FAILED",
+            "unexpected": True,
+            "verdicts": [],
+            "iterations": [],
+            "conclusions": [],
+            "seededIn": ["seed"],
+            "appliesTo": [],
+        }
+    ]
+    classification["issues"][0].update(description=None, key=None, close=False)
+    ClassificationManifest.model_validate(classification)
+
+    instance = _Instance()
+    apply_classification(manifest, path, "http://host", Path("jar"), instance)
+
+    assert [url for url, _ in instance.posts()] == ["/api/v2/results/42/classify/"]
+
+
+def test_an_older_rule_less_issue_without_a_fixture_is_named(tmp_path: Path) -> None:
+    from core.classify_api import apply_classification
+
+    manifest, path = _classify_manifest(tmp_path)
+    manifest["classification"]["issues"].append(
+        {"id": "lonely", "title": "Lonely", "close": False}
+    )
+
+    with pytest.raises(CliError, match="issue 'lonely' has no rules and no fixture"):
+        apply_classification(manifest, path, "http://host", Path("jar"), _Instance())

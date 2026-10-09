@@ -24,7 +24,7 @@ which runs are seeded first (``api``) and which are held back (``+ui``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from core.common import CliError
@@ -105,6 +105,10 @@ class IssueSpec:
     #: Close the issue once its rules exist. Closing deactivates the issue's
     #: rules and lifts suppression, which is the "stale classification" state.
     close: bool = False
+    #: The fixture whose project the issue belongs to. Required for an issue
+    #: without rules, which is created directly; otherwise derived from its
+    #: rules' pins, and checked against them when the plan names it.
+    fixture: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +132,8 @@ class RuleSpec:
     expected: bool | None = None
     scope: str = "future"
     match: tuple[str, ...] = ()
+    #: ``False`` deactivates the rule once it exists, on an issue left open.
+    active: bool = True
 
     def disposition(self) -> bool | None:
         return self.expected
@@ -243,6 +249,7 @@ def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
             description=item.get("description"),
             key=item.get("key"),
             close=bool(item.get("close", False)),
+            fixture=item.get("fixture"),
         )
         for item in raw_issues
     )
@@ -276,7 +283,21 @@ def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
         )
         # Cross-references: fail here, with the rule's own id, rather than
         # halfway through an import against a live instance.
-        plan.issue_by_id(str(item["issue"]))
+        issue = plan.issue_by_id(str(item["issue"]))
+        active = bool(item.get("active", True))
+        # `active: false` asks for a rule that exists but stamps nothing new.
+        # Two shapes are inactive already, so the flag there says nothing.
+        if not active:
+            _require(
+                scope != "oneoff",
+                f"rule {item['id']!r} is oneoff, which is created inactive; "
+                "drop active: false",
+            )
+            _require(
+                not issue.close,
+                f"rule {item['id']!r} sets active: false but its issue "
+                f"{issue.id!r} closes, which deactivates every rule anyway",
+            )
         pin = plan.pin_by_id(str(item["pin"]))
         if "verdicts" in match:
             _require(
@@ -299,6 +320,7 @@ def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
                 expected=expected,
                 scope=scope,
                 match=match,
+                active=active,
             )
         )
 
@@ -319,6 +341,24 @@ def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
             f"{', '.join(sorted(fixtures))}; an issue belongs to one project, "
             "so split it into one issue per fixture",
         )
+
+    resolved: list[IssueSpec] = []
+    for issue in plan.issues:
+        derived = next(iter(fixtures_by_issue.get(issue.id, ())), None)
+        if derived is None:
+            _require(
+                bool(issue.fixture),
+                f"issue {issue.id!r} has no rules, so nothing names its project; "
+                "give it a fixture",
+            )
+        else:
+            _require(
+                issue.fixture in (None, derived),
+                f"issue {issue.id!r} names fixture {issue.fixture!r} but its "
+                f"rules' pins live in {derived!r}; an issue belongs to one project",
+            )
+        resolved.append(replace(issue, fixture=issue.fixture or derived))
+    plan.issues = tuple(resolved)
 
     return plan
 
@@ -379,6 +419,7 @@ def classification_manifest(
                 "description": issue.description,
                 "key": issue.key,
                 "close": issue.close,
+                "fixture": issue.fixture,
                 "issueId": None,
                 "projectId": None,
                 "projectName": None,
@@ -394,6 +435,7 @@ def classification_manifest(
                 "expected": rule.disposition(),
                 "scope": rule.scope,
                 "match": list(rule.match),
+                "active": rule.active,
                 "ruleId": None,
             }
             for rule in plan.rules
