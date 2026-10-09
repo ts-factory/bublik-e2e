@@ -78,7 +78,13 @@ class IssueSpecModel(BaseModel):
 
     id: str = Field(description="Referenced from a rule's 'issue'.")
     title: str
-    description: str | None = None
+    description: str | None = Field(
+        default=None,
+        description=(
+            "Free-text body for the issue, markdown. Sent only when the issue "
+            "is created, so editing one needs a stack reset to take effect."
+        ),
+    )
     key: str | None = Field(
         default=None,
         description="External reference, e.g. 'ref://E2E_BUGS/E2E-101'.",

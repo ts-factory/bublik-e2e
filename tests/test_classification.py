@@ -6,7 +6,7 @@ import pytest
 
 from core.bundle import FixtureSpec, apply_mix, collect_leaf_tests, generate_bundle
 from core.classification import Pin, build_classification, classification_manifest
-from core.classify_api import find_result_id, matcher_for
+from core.classify_api import find_result, matcher_for
 from core.common import CliError, read_json
 from core.discovery import discover_fixtures
 from core.planning import MixValue
@@ -209,6 +209,26 @@ def test_explicit_expected_overrides_the_category_default() -> None:
     assert plan.rules[0].disposition() is False
 
 
+def test_an_issue_whose_rules_span_fixtures_is_rejected() -> None:
+    """One fixture is one project, and an Issue belongs to exactly one project."""
+    with pytest.raises(CliError, match="across fixtures"):
+        build_classification(
+            {
+                "pins": [
+                    {"id": "rx", "fixture": "net-drv-ts", "test": "rx_mode"},
+                    {"id": "tx", "fixture": "dpdk-ethdev-ts", "test": "tx_burst"},
+                ],
+                "issues": [
+                    {
+                        "id": "shared",
+                        "title": "Shared",
+                        "rules": [{"pin": "rx"}, {"pin": "tx"}],
+                    }
+                ],
+            }
+        )
+
+
 def test_an_absent_section_is_empty() -> None:
     assert build_classification(None).is_empty()
 
@@ -234,6 +254,9 @@ def test_manifest_splits_bundles_into_import_waves() -> None:
     assert pin["appliesTo"] == ["later"]
     assert rendered["issues"][0]["issueId"] is None
     assert rendered["rules"][0]["ruleId"] is None
+    # Filled in by --setup-classification, from the result actually classified.
+    assert rendered["issues"][0]["projectId"] is None
+    assert rendered["issues"][0]["projectName"] is None
 
 
 def test_a_pin_forcing_many_leaves_lists_each_run_once() -> None:
@@ -253,6 +276,28 @@ def test_a_pin_forcing_many_leaves_lists_each_run_once() -> None:
 
 def test_no_classification_section_means_no_manifest_block() -> None:
     assert classification_manifest(build_classification(None), []) is None
+
+
+def test_the_manifest_carries_an_issue_description() -> None:
+    """The description is authored in the plan and only ever passes through.
+
+    Nothing derives or defaults it: an issue the plan leaves bare reaches the
+    manifest as null, which is what the empty-body fixtures rely on.
+    """
+    plan = build_classification(
+        _plan(
+            issues=[
+                {"id": "known", "title": "Known", "description": "**Bad** thing.\n"},
+                {"id": "bare", "title": "Bare"},
+            ]
+        )
+    )
+    bundles = [{"id": "seed", "importVia": "api", "pinnedResults": [{"pin": "rx"}]}]
+
+    issues = classification_manifest(plan, bundles)["issues"]
+
+    assert issues[0]["description"] == "**Bad** thing.\n"
+    assert issues[1]["description"] is None
 
 
 # --------------------------------------------------------------------------
@@ -276,7 +321,7 @@ def test_matcher_omits_the_dimensions_it_keeps() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_find_result_id_matches_on_a_parameter_subset() -> None:
+def test_find_result_matches_on_a_parameter_subset() -> None:
     record = {"pin": "rx", "test": "rx_mode", "params": {"mode": "promisc"}}
 
     def fetch(url: str, **_: object) -> dict:
@@ -295,10 +340,12 @@ def test_find_result_id_matches_on_a_parameter_subset() -> None:
             ]
         }
 
-    assert find_result_id("http://host", 7, record, Path("cookies"), fetch) == 2
+    result = find_result("http://host", 7, record, Path("cookies"), fetch)
+
+    assert result["result_id"] == 2
 
 
-def test_find_result_id_ignores_matching_results_from_other_runs() -> None:
+def test_find_result_ignores_matching_results_from_other_runs() -> None:
     """The query spans every run, so the run filter is applied here."""
     record = {"pin": "rx", "test": "rx_mode", "params": {"mode": "promisc"}}
 
@@ -310,20 +357,22 @@ def test_find_result_id_ignores_matching_results_from_other_runs() -> None:
             ]
         }
 
-    assert find_result_id("http://host", 7, record, Path("cookies"), fetch) == 2
+    result = find_result("http://host", 7, record, Path("cookies"), fetch)
+
+    assert result["result_id"] == 2
 
 
-def test_find_result_id_reports_the_pin_when_the_run_lacks_the_test() -> None:
+def test_find_result_reports_the_pin_when_the_run_lacks_the_test() -> None:
     record = {"pin": "rx", "test": "rx_mode", "params": {"mode": "promisc"}}
 
     def fetch(_url: str, **_: object) -> dict:
         return {"results": [{"result_id": 1, "run_id": 99, "parameters": []}]}
 
     with pytest.raises(CliError, match="has no result for test"):
-        find_result_id("http://host", 7, record, Path("cookies"), fetch)
+        find_result("http://host", 7, record, Path("cookies"), fetch)
 
 
-def test_find_result_id_reports_the_pin_when_no_parameters_match() -> None:
+def test_find_result_reports_the_pin_when_no_parameters_match() -> None:
     record = {"pin": "rx", "test": "rx_mode", "params": {"mode": "promisc"}}
 
     def fetch(_url: str, **_: object) -> dict:
@@ -332,7 +381,7 @@ def test_find_result_id_reports_the_pin_when_no_parameters_match() -> None:
         }
 
     with pytest.raises(CliError, match="pin 'rx'"):
-        find_result_id("http://host", 7, record, Path("cookies"), fetch)
+        find_result("http://host", 7, record, Path("cookies"), fetch)
 
 
 # --------------------------------------------------------------------------
@@ -422,6 +471,17 @@ days:
 # --------------------------------------------------------------------------
 
 
+def _row(result_id: int, project_id: int = 3) -> dict:
+    """One row as ``/results/?test_name=`` returns it, project fields included."""
+    return {
+        "result_id": result_id,
+        "run_id": 7,
+        "parameters": [],
+        "project_id": project_id,
+        "project_name": f"tsf/project-{project_id}",
+    }
+
+
 def _classify_manifest(tmp_path: Path) -> tuple[dict, Path]:
     manifest = {
         "bundles": [
@@ -459,16 +519,22 @@ def _classify_manifest(tmp_path: Path) -> tuple[dict, Path]:
 def test_apply_classification_creates_then_closes(tmp_path: Path) -> None:
     from core.classify_api import apply_classification
 
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, object]] = []
 
-    def fetch(url: str, *, method: str = "GET", **_: object) -> dict:
-        calls.append((method, url))
+    def fetch(
+        url: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+        **_: object,
+    ) -> dict:
+        calls.append((method, url, payload))
         if "results/?" in url:
-            return {"results": [{"result_id": 42, "run_id": 7, "parameters": []}]}
+            return {"results": [_row(42)]}
         if url.endswith("/classify/"):
             return {"issue_id": 3, "rule_id": 9}
-        if url.endswith("/issues/3/"):
-            return {"state": "open"}
+        if url.endswith("/issues/close/"):
+            return {"requested": 1, "updated": 1, "unchanged": 0, "not_found": 0}
         return {}
 
     manifest, path = _classify_manifest(tmp_path)
@@ -478,10 +544,139 @@ def test_apply_classification_creates_then_closes(tmp_path: Path) -> None:
     assert classification["issues"][0]["issueId"] == 3
     assert classification["rules"][0]["ruleId"] == 9
     assert classification["rules"][0]["classifiedResultIds"] == [42]
-    assert ("POST", "http://host/api/v2/issues/3/close/") in calls
+    # close is a collection action, taking the ids in the body.
+    assert ("POST", "http://host/api/v2/issues/close/", {"ids": [3]}) in calls
 
 
-def test_apply_classification_is_idempotent(tmp_path: Path) -> None:
+def test_the_classify_payload_carries_the_results_project(tmp_path: Path) -> None:
+    """The endpoint validates the inline issue before filling its project in.
+
+    ``ClassifyRequestSerializer.validate_issue`` runs the whole ``IssueSerializer``
+    over the body, where ``project`` is a required FK, and only then does the view
+    overwrite it with the classified result's own. Sending the result's project is
+    what gets past that, and it can never disagree with what the backend picks.
+    """
+    from core.classify_api import apply_classification
+
+    bodies: list[dict] = []
+
+    def fetch(
+        url: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+        **_: object,
+    ) -> dict:
+        if "results/?" in url:
+            return {"results": [_row(42, project_id=5)]}
+        if url.endswith("/classify/"):
+            bodies.append(payload or {})
+            return {"issue_id": 3, "rule_id": 9}
+        if url.endswith("/issues/3/"):
+            return {"state": "open"}
+        return {}
+
+    manifest, path = _classify_manifest(tmp_path)
+    apply_classification(manifest, path, "http://host", Path("jar"), fetch)
+
+    # bug_key is sent even though the plan's issue has no external key: it
+    # shares a unique-together constraint with project, so DRF requires it.
+    assert bodies[0]["issue"] == {
+        "title": "Known",
+        "project": 5,
+        "bug_key": None,
+    }
+    issue = manifest["classification"]["issues"][0]
+    assert (issue["projectId"], issue["projectName"]) == (5, "tsf/project-5")
+
+
+def test_the_classify_payload_carries_the_issue_description(tmp_path: Path) -> None:
+    """Sent only when the plan wrote one, and only on the request that creates.
+
+    An issue that already carries an ``issueId`` is referenced by id, so a
+    description edited after the issue exists never reaches the instance --
+    changing one needs a stack reset, the same as changing a pin.
+    """
+    from core.classify_api import apply_classification
+
+    bodies: list[dict] = []
+
+    def fetch(
+        url: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+        **_: object,
+    ) -> dict:
+        if "results/?" in url:
+            return {"results": [_row(42)]}
+        if url.endswith("/classify/"):
+            bodies.append(payload or {})
+            return {"issue_id": 3, "rule_id": 9}
+        return {}
+
+    manifest, path = _classify_manifest(tmp_path)
+    manifest["classification"]["issues"][0]["description"] = "**Bad** thing.\n"
+    apply_classification(manifest, path, "http://host", Path("jar"), fetch)
+
+    assert bodies[0]["issue"]["description"] == "**Bad** thing.\n"
+
+
+def test_an_issue_without_a_description_omits_the_key(tmp_path: Path) -> None:
+    """Not an empty string: the column is nullable and null is what "none" is."""
+    from core.classify_api import apply_classification
+
+    bodies: list[dict] = []
+
+    def fetch(
+        url: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+        **_: object,
+    ) -> dict:
+        if "results/?" in url:
+            return {"results": [_row(42)]}
+        if url.endswith("/classify/"):
+            bodies.append(payload or {})
+            return {"issue_id": 3, "rule_id": 9}
+        return {}
+
+    manifest, path = _classify_manifest(tmp_path)
+    manifest["classification"]["issues"][0]["description"] = None
+    apply_classification(manifest, path, "http://host", Path("jar"), fetch)
+
+    assert "description" not in bodies[0]["issue"]
+
+
+def test_ids_survive_a_failure_partway_through(tmp_path: Path) -> None:
+    """Nothing but the manifest ties an instance's issue back to the plan.
+
+    Written only at the end, a run that dies on a later rule strands everything
+    it already created: the re-run tries to create the same issues again and the
+    backend rejects them as duplicates.
+    """
+    from core.classify_api import apply_classification
+
+    def fetch(url: str, *, method: str = "GET", **_: object) -> dict:
+        if "results/?" in url:
+            return {"results": [_row(42)]}
+        if url.endswith("/classify/"):
+            return {"issue_id": 3, "rule_id": 9}
+        raise CliError("boom")
+
+    manifest, path = _classify_manifest(tmp_path)
+    with pytest.raises(CliError, match="boom"):
+        apply_classification(manifest, path, "http://host", Path("jar"), fetch)
+
+    written = read_json(path)
+    assert written["classification"]["issues"][0]["issueId"] == 3
+    assert written["classification"]["rules"][0]["ruleId"] == 9
+
+
+def test_apply_classification_is_idempotent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A re-run must neither duplicate rules nor claim work it did not do."""
     from core.classify_api import apply_classification
 
@@ -489,8 +684,9 @@ def test_apply_classification_is_idempotent(tmp_path: Path) -> None:
 
     def fetch(url: str, *, method: str = "GET", **_: object) -> dict:
         calls.append((method, url))
-        if url.endswith("/issues/3/"):
-            return {"state": "closed"}
+        if url.endswith("/issues/close/"):
+            # Already closed: the endpoint counts it as unchanged.
+            return {"requested": 1, "updated": 0, "unchanged": 1, "not_found": 0}
         return {}
 
     manifest, path = _classify_manifest(tmp_path)
@@ -500,7 +696,7 @@ def test_apply_classification_is_idempotent(tmp_path: Path) -> None:
     apply_classification(manifest, path, "http://host", Path("jar"), fetch)
 
     assert not [c for c in calls if c[1].endswith("/classify/")]
-    assert not [c for c in calls if c[1].endswith("/close/")]
+    assert "already applied" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------
@@ -610,7 +806,7 @@ def test_a_result_missing_the_pins_verdicts_is_rejected() -> None:
     }
 
     with pytest.raises(CliError, match="older than the pin"):
-        find_result_id("http://host", 7, record, Path("jar"), _stale_fetch([]))
+        find_result("http://host", 7, record, Path("jar"), _stale_fetch([]))
 
 
 def test_a_result_carrying_the_pins_verdicts_resolves() -> None:
@@ -622,7 +818,7 @@ def test_a_result_carrying_the_pins_verdicts_resolves() -> None:
     }
     fetch = _stale_fetch(["TCP fragment lost above MTU"])
 
-    assert find_result_id("http://host", 7, record, Path("jar"), fetch) == 5
+    assert find_result("http://host", 7, record, Path("jar"), fetch)["result_id"] == 5
 
 
 def test_extra_verdicts_on_the_result_are_fine() -> None:
@@ -635,10 +831,12 @@ def test_extra_verdicts_on_the_result_are_fine() -> None:
     }
     fetch = _stale_fetch(["TCP fragment lost above MTU", "Something else"])
 
-    assert find_result_id("http://host", 7, record, Path("jar"), fetch) == 5
+    assert find_result("http://host", 7, record, Path("jar"), fetch)["result_id"] == 5
 
 
 def test_a_pin_authoring_no_verdicts_skips_the_check() -> None:
     record = {"pin": "p", "test": "mtu_tcp", "params": {"mtu": "9000"}}
 
-    assert find_result_id("http://host", 7, record, Path("jar"), _stale_fetch([])) == 5
+    result = find_result("http://host", 7, record, Path("jar"), _stale_fetch([]))
+
+    assert result["result_id"] == 5

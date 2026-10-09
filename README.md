@@ -276,6 +276,12 @@ classification:
     - id: rx-timeout
       title: "RX mode negotiation times out on this NIC"
       key: "ref://E2E_BUGS/E2E-101"
+      description: |          # markdown body, optional
+        **`rx_mode` never leaves negotiation.** The driver reports the link
+        up, but the mode request is never acknowledged.
+
+        - Reproduces on every run since the 6.9 driver bump.
+        - Workaround: set the mode with `ethtool -X` first.
 
   rules:
     - id: rx-by-test          # test-only: every iteration of rx_mode
@@ -297,8 +303,14 @@ it counting, `null` marks it without deciding — and defaults from `category`.
 Setting `close: true` on an issue closes it once its rules exist, which
 deactivates them and lifts suppression: the "stale classification" state.
 
+`description` is free-text markdown, stored on the issue and returned by
+`/api/v2/issues/` and `/api/v2/runs/{id}/issues/`. It is optional — the plan
+leaves a few issues without one on purpose, so the untriaged, empty-body state
+has fixtures too.
+
 Pins are generated into every run they apply to, unconditionally. Creating the
-issues and rules through the API is opt-in:
+issues and rules through the API takes a flag, which `task e2e:seed` passes by
+default:
 
 ```bash
 bublik-e2e run --plan e2e/plan.yaml --setup-projects --setup-classification
@@ -307,6 +319,7 @@ bublik-e2e run --plan e2e/plan.yaml --setup-projects --setup-classification
 Without the flag the pinned results are still generated, and the triage is left
 to be done by hand in the UI (or by the Playwright suite) — which is the point of
 keeping it a flag: the fixture gives you stable things to classify either way.
+From the Taskfile that is `task e2e:seed E2E_CLASSIFY=0`.
 
 The ordering the flag creates is what makes the assertion meaningful:
 
@@ -321,7 +334,10 @@ The manifest records both halves. Each pin lists `seededIn` (the runs a rule can
 be written against) and `appliesTo` (the runs it should reach), each bundle
 carries its `pinnedResults`, and `issueId`/`ruleId` are filled in once
 `--setup-classification` has run — which is also how the suite tells whether to
-create the issues itself.
+create the issues itself. Each issue also records the `projectId`/`projectName`
+it landed in: an issue belongs to exactly one project, and which one follows
+from the fixture its rules' pins live in, so a plan that points one issue's
+rules at two fixtures is rejected when the plan is validated.
 
 > **Adding or changing a pin needs a re-import.** Regenerating a bundle does not
 > re-import it: reconciliation matches on the source URL and finds the run
@@ -331,6 +347,11 @@ create the issues itself.
 > on verdicts, handed a result with none, captures an empty list, and an empty
 > dimension is not applied, so it silently becomes test-only. Reset the stack
 > (`down --volumes`, then up and seed) after editing pins.
+
+> The same goes for an issue's `title`, `key` or `description`: they are sent
+> on the request that *creates* the issue, and every later rule references the
+> id the backend handed back, so an edit reaches an already-seeded instance
+> only after the same reset.
 
 Rules may also be written inline under their issue, which supplies the `issue`
 link and derives an omitted `id` from the issue's — worth it once a plan carries

@@ -291,6 +291,11 @@ class ClassificationIssue(_Model):
     key: str | None
     close: bool
     issueId: int | None = None
+    #: The Bublik project the issue was created in, also filled by
+    #: --setup-classification. An issue belongs to exactly one project; which
+    #: one follows from the fixture its rules' pins live in.
+    projectId: int | None = None
+    projectName: str | None = None
 
 
 class ClassificationRule(_Model):
@@ -339,12 +344,18 @@ class Manifest(_Model):
     bundles: list[Bundle]
 
 
-def _strip_titles(node: Any) -> None:
-    """Drop Pydantic's auto-generated ``title`` keys, recursively, in place."""
+def _strip_titles(node: Any, *, is_properties: bool = False) -> None:
+    """Drop Pydantic's auto-generated ``title`` keys, recursively, in place.
+
+    A ``properties`` map is keyed by field name, so a ``title`` key there is a
+    field called ``title`` (``ClassificationIssue.title``), not metadata — it
+    stays, while the schemas under it are stripped like any other.
+    """
     if isinstance(node, dict):
-        node.pop("title", None)
-        for value in node.values():
-            _strip_titles(value)
+        if not is_properties:
+            node.pop("title", None)
+        for key, value in node.items():
+            _strip_titles(value, is_properties=key == "properties")
     elif isinstance(node, list):
         for value in node:
             _strip_titles(value)

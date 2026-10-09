@@ -48,15 +48,19 @@ def _param_strings(params: dict[str, Any]) -> set[str]:
     return {f"{key}={value}" for key, value in params.items() if key and value}
 
 
-def find_result_id(
+def find_result(
     base_url: str,
     run_id: int,
     record: dict[str, Any],
     cookie_jar: Path,
     fetch: Any,
     cache: dict[str, Any] | None = None,
-) -> int:
-    """Resolve one pinned leaf to its result id in an imported run.
+) -> dict[str, Any]:
+    """Resolve one pinned leaf to its result row in an imported run.
+
+    The whole row is returned, not just ``result_id``: it also carries
+    ``project_id``/``project_name``, which the classify payload needs and which
+    would otherwise take a second request to recover.
 
     Filtered by test name only, then narrowed to ``run_id`` here. The endpoint's
     ``parent_id`` looks like the obvious filter but is not: it matches
@@ -111,7 +115,7 @@ def find_result_id(
                     "The imported run is older than the pin -- re-import it, or "
                     "reset the stack, before applying classification."
                 )
-        return int(result["result_id"])
+        return result
     raise CliError(
         f"pin {record['pin']!r}: no result in run {run_id} matches test "
         f"{record['test']!r} with parameters {sorted(wanted)}; the run has "
@@ -168,21 +172,42 @@ def apply_classification(
             raise CliError(f"rule {rule['id']!r} names unknown issue {rule['issue']!r}")
 
         bundle, record = _seeded_bundle(manifest, rule["pin"])
-        result_id = find_result_id(
+        result = find_result(
             base_url, int(bundle["runId"]), record, cookie_jar, fetch, lookups
         )
+        result_id = int(result["result_id"])
+        project_id = result["project_id"]
+        project_name = result["project_name"]
 
         # The first rule for an issue creates it; later rules reference the id the
         # backend handed back, so one issue can carry several differently-shaped
         # rules — which is what lets the suite compare their behaviour.
         if issue.get("issueId"):
+            # An Issue belongs to exactly one project, and the endpoint rejects a
+            # reference from a result in another one. Say so against the plan's
+            # own ids: the backend's message names an issue id nobody wrote.
+            if issue.get("projectId") not in (None, project_id):
+                raise CliError(
+                    f"issue {issue['id']!r} was created in project "
+                    f"{issue['projectName']!r} but rule {rule['id']!r} classifies "
+                    f"a result in {project_name!r}; an issue belongs to one "
+                    "project, so split it into one issue per project"
+                )
             issue_payload: Any = issue["issueId"]
         else:
-            issue_payload = {"title": issue["title"]}
+            # Issue has UniqueConstraints over (project, title) and
+            # (project, bug_key), and DRF makes every field of a unique-together
+            # constraint required -- so both must be present even though the
+            # endpoint overwrites `project` with the classified result's own and
+            # an issue without an external reference has no bug key at all.
+            # `null` is what "unlinked" looks like there; omitting it is a 400.
+            issue_payload = {
+                "title": issue["title"],
+                "project": project_id,
+                "bug_key": issue.get("key") or None,
+            }
             if issue.get("description"):
                 issue_payload["description"] = issue["description"]
-            if issue.get("key"):
-                issue_payload["bug_key"] = issue["key"]
 
         body = {
             "issue": issue_payload,
@@ -199,31 +224,41 @@ def apply_classification(
         )
         if not issue.get("issueId"):
             issue["issueId"] = int(response["issue_id"])
+            issue["projectId"] = project_id
+            issue["projectName"] = project_name
             created_issues += 1
         rule["ruleId"] = int(response["rule_id"])
         rule.setdefault("classifiedResultIds", []).append(result_id)
         created_rules += 1
+        # Persist per rule, not once at the end. The ids are the only record
+        # that these issues and rules exist -- nothing else ties an instance's
+        # issue back to the plan that asked for it -- so a failure partway
+        # through, with the manifest unwritten, strands everything created so
+        # far: the re-run tries to create them again and the backend rejects the
+        # duplicate. Writing as we go makes a failed run resumable instead.
+        write_json(manifest_path, manifest, True)
 
     # Closing happens last: it deactivates the issue's rules, so a rule created
-    # after the close would be silently inert. Re-reading the state first keeps
-    # a re-run from reporting work it did not do.
+    # after the close would be silently inert.
+    #
+    # `close` is a *collection* action -- POST /issues/close/ with a list of ids,
+    # not /issues/{id}/close/ -- and it reports how many issues it actually
+    # moved. That count is what a re-run should report, so an already-closed
+    # issue needs no state check of its own.
+    to_close = [
+        issue["issueId"]
+        for issue in issues.values()
+        if issue.get("close") and issue.get("issueId")
+    ]
     closed = 0
-    for issue in issues.values():
-        if not (issue.get("close") and issue.get("issueId")):
-            continue
-        current = fetch(
-            f"{base_url}/api/v2/issues/{issue['issueId']}/",
-            cookie_jar=cookie_jar,
-        )
-        if current.get("state") == "closed":
-            continue
-        fetch(
-            f"{base_url}/api/v2/issues/{issue['issueId']}/close/",
+    if to_close:
+        summary = fetch(
+            f"{base_url}/api/v2/issues/close/",
             method="POST",
-            payload={},
+            payload={"ids": to_close},
             cookie_jar=cookie_jar,
         )
-        closed += 1
+        closed = int(summary.get("updated") or 0)
 
     write_json(manifest_path, manifest, True)
     parts = []

@@ -303,6 +303,23 @@ def build_classification(raw: dict[str, Any] | None) -> ClassificationPlan:
         )
 
     plan.rules = tuple(rules)
+
+    # One fixture is one Bublik project, and an Issue belongs to exactly one
+    # project -- the backend refuses to attach a rule from another one. Catch it
+    # here, naming the plan's own ids, rather than partway through a live run.
+    fixtures_by_issue: dict[str, set[str]] = {}
+    for rule in rules:
+        fixtures_by_issue.setdefault(rule.issue, set()).add(
+            plan.pin_by_id(rule.pin).fixture
+        )
+    for issue_id, fixtures in fixtures_by_issue.items():
+        _require(
+            len(fixtures) == 1,
+            f"issue {issue_id!r} has rules across fixtures "
+            f"{', '.join(sorted(fixtures))}; an issue belongs to one project, "
+            "so split it into one issue per fixture",
+        )
+
     return plan
 
 
@@ -363,6 +380,8 @@ def classification_manifest(
                 "key": issue.key,
                 "close": issue.close,
                 "issueId": None,
+                "projectId": None,
+                "projectName": None,
             }
             for issue in plan.issues
         ],
