@@ -33,6 +33,9 @@ class FixtureSpec:
     run_date: str
     metas: dict[str, str] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
+    # Exact ISO start (tz-aware) to rebase the run onto, instead of the
+    # deterministic noon slot on ``run_date``. Live runs start "now".
+    start: str | None = None
 
 
 def upsert_meta(
@@ -356,7 +359,9 @@ def patch_bundle(
 
     meta_items = meta_data.setdefault("metas", [])
     # iso_for_day only chooses the target date/offset the run is rebased onto.
-    target_start = iso_for_day(spec.run_date, int(spec.tags.get("ordinal", "0")))
+    target_start = spec.start or iso_for_day(
+        spec.run_date, int(spec.tags.get("ordinal", "0"))
+    )
     start_datetime = datetime.fromisoformat(target_start)
     start_offset = start_datetime.utcoffset() or timedelta()
     start_timestamp = target_start

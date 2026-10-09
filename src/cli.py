@@ -22,6 +22,7 @@ from rich.table import Table
 from core.common import CliError, console
 from core.discovery import selected_fixtures
 from core.importer import generate_and_import, import_manifest
+from core.live import simulate_live_run
 from core.manifest import generate_manifest
 from core.manifest_models import manifest_json_schema
 from core.plan_models import plan_json_schema
@@ -390,6 +391,137 @@ def run(
         setup_projects=setup_projects,
         timeout=timeout,
         include_ui=include_ui,
+    )
+
+
+LIVE_EPILOG = """[bold]Examples[/]
+
+[dim]Stream a run live at 5x speed and watch it fill in, creating the project first:[/]
+
+[cyan]bublik-e2e live net-drv-ts --speed 5 --setup-projects --url http://localhost[/]
+
+[dim]Crash mid-run: stop after 30% of the tests and leave the run RUNNING:[/]
+
+[cyan]bublik-e2e live net-drv-ts --stop-after 30% --url http://localhost[/]
+
+[dim]Lose 10% of the tests' events so Bublik records LOST results:[/]
+
+[cyan]bublik-e2e live dpdk-ethdev-ts --drop-rate 10 --seed 1 --url http://localhost[/]
+
+[dim]Stream live, then publish the bundle and source-import it (the real TE flow):[/]
+
+[cyan]bublik-e2e live basic --then-import --publish-dir /srv/logs/e2e --url http://localhost[/]
+
+[dim]Print the init/feed/finish payloads without contacting Bublik:[/]
+
+[cyan]bublik-e2e live basic --dry-run --output live.json[/]
+"""
+
+
+@app.command(epilog=LIVE_EPILOG)
+def live(
+    fixture: Annotated[
+        str,
+        typer.Argument(
+            metavar="FIXTURE",
+            help="Bundled fixture name (basic, dpdk-ethdev-ts, net-drv-ts) or a "
+            "fixture provider directory (containing fixture.py).",
+        ),
+    ],
+    conclusion: Annotated[
+        str,
+        typer.Option(help="Conclusion whose result mix the streamed run gets."),
+    ] = "ok",
+    mix: Annotated[
+        Optional[str],
+        typer.Option(
+            metavar="k=v,...",
+            help="Inline result mix, e.g. 'unexpectedFailed=20%,unexpectedSkipped=5%'.",
+        ),
+    ] = None,
+    speed: Annotated[
+        float,
+        typer.Option(
+            help="Replay speed relative to the fixture's own timeline "
+            "(synthetic fixtures take about 3s per test; 10 is ten times faster).",
+        ),
+    ] = 1.0,
+    batch_interval: Annotated[
+        float,
+        typer.Option(help="Seconds between feed requests (events are batched)."),
+    ] = 1.0,
+    stop_after: Annotated[
+        Optional[str],
+        typer.Option(
+            metavar="N|N%",
+            help="Stop after N tests (or N% of them) without finishing, leaving "
+            "the run RUNNING like a crashed TE.",
+        ),
+    ] = None,
+    drop_rate: Annotated[
+        Optional[float],
+        typer.Option(
+            metavar="PERCENT",
+            help="Drop the events of this percentage of tests; Bublik fills the "
+            "gaps with LOST results.",
+        ),
+    ] = None,
+    seed: Annotated[
+        int, typer.Option(help="Seed choosing which tests --drop-rate drops.")
+    ] = 0,
+    then_import: Annotated[
+        bool,
+        typer.Option(
+            help="After finishing, publish the bundle and source-import it, "
+            "replacing the live data like TE publishing its logs. Needs "
+            "--publish-dir.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            help="Print the init/feed/finish payloads as JSON instead of streaming."
+        ),
+    ] = False,
+    output: Annotated[
+        Optional[Path],
+        typer.Option(help="With --dry-run, write the payloads to this file."),
+    ] = None,
+    publish_dir: PublishDirOpt = None,
+    pretty: PrettyOpt = False,
+    run_log_schema: RunLogSchemaOpt = None,
+    meta_data_schema: MetaDataSchemaOpt = None,
+    url: UrlOpt = None,
+    env_file: EnvFileOpt = None,
+    email: EmailOpt = None,
+    password: PasswordOpt = None,
+    setup_projects: SetupProjectsOpt = False,
+    timeout: TimeoutOpt = 600,
+) -> None:
+    """Stream one fixture run into the instance over the TE live-import API."""
+    _dispatch(
+        simulate_live_run,
+        fixture=fixture,
+        conclusion=conclusion,
+        mix=mix,
+        speed=speed,
+        batch_interval=batch_interval,
+        stop_after=stop_after,
+        drop_rate=drop_rate,
+        seed=seed,
+        then_import=then_import,
+        dry_run=dry_run,
+        output=output,
+        publish_dir=publish_dir,
+        pretty=pretty,
+        run_log_schema=run_log_schema,
+        meta_data_schema=meta_data_schema,
+        url=url,
+        env_file=env_file,
+        email=email,
+        password=password,
+        setup_projects=setup_projects,
+        timeout=timeout,
     )
 
 

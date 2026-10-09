@@ -48,7 +48,7 @@ def curl_json(
     url: str,
     *,
     method: str = "GET",
-    payload: dict[str, Any] | None = None,
+    payload: Any = None,
     cookie_jar: Path | None = None,
 ) -> Any:
     command = [
@@ -66,19 +66,24 @@ def curl_json(
         command.extend(["--cookie", str(cookie_jar), "--cookie-jar", str(cookie_jar)])
     if method != "GET":
         command.extend(["--request", method])
+    body_input: str | None = None
     if payload is not None:
+        # The body goes through stdin rather than argv: live-import feed batches
+        # can outgrow the OS argument-size limit.
+        body_input = json.dumps(payload)
         command.extend(
             [
                 "--header",
                 "Content-Type: application/json",
-                "--data",
-                json.dumps(payload),
+                "--data-binary",
+                "@-",
             ]
         )
     command.append(url)
     try:
         completed = subprocess.run(
             command,
+            input=body_input,
             text=True,
             capture_output=True,
             check=False,
@@ -99,6 +104,9 @@ def curl_json(
         ) from exc
     if status < 200 or status >= 300:
         raise CliError(f"HTTP {status} returned by {url}: {body.strip()}")
+    # 204 No Content (e.g. the live-import feed/finish endpoints).
+    if not body.strip():
+        return None
     try:
         return json.loads(body)
     except json.JSONDecodeError as exc:
