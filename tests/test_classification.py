@@ -7,7 +7,7 @@ import pytest
 
 from core.bundle import FixtureSpec, apply_mix, collect_leaf_tests, generate_bundle
 from core.classification import Pin, build_classification, classification_manifest
-from core.classify_api import find_result, matcher_for
+from core.classify_api import classify_options, find_result, matcher_for, rules_of
 from core.common import CliError, read_json
 from core.discovery import discover_fixtures
 from core.planning import MixValue
@@ -322,13 +322,63 @@ _OPTIONS = {
 }
 
 
+_RULE = rules_of(_OPTIONS)[0]
+
+# The same result as a backend giving a list of rules: each rule has its
+# own tags and the runs that, with the test, tell the rule in the matcher.
+_RULE_LIST = [
+    {
+        "test_id": 5,
+        "test_name": "rx_mode",
+        "test_path": "net/rx_mode",
+        "run_ids": [7],
+        "result_ids": [42],
+        "parameters": {"mode": "promisc", "env": "lab"},
+        "verdicts": [["Packet lost"]],
+        "tags": {"default": ["linux", "x86"], "allowed": ["linux", "x86", "lab"]},
+    }
+]
+
+
+def test_both_options_shapes_propose_the_same_rule() -> None:
+    """The run's tags of the object shape reach its test as the list's own."""
+    from_list = dict(rules_of(_RULE_LIST)[0])
+    assert from_list.pop("run_ids") == [7]
+    assert _RULE["tags"] == from_list["tags"]
+    assert matcher_for(["parameters", "verdicts", "tags"], from_list) == matcher_for(
+        ["parameters", "verdicts", "tags"], _RULE
+    )
+
+
+def test_a_rule_from_the_list_shape_names_its_runs_in_the_matcher() -> None:
+    assert matcher_for(["verdicts"], _RULE_LIST[0]) == {
+        "test_id": 5,
+        "run_ids": [7],
+        "parameters": {},
+        "verdicts": [["Packet lost"]],
+        "tags": [],
+    }
+
+
+@pytest.mark.parametrize("options", [[], _RULE_LIST * 2, {"tests": []}, None])
+def test_classify_options_wants_exactly_one_rule(options: object) -> None:
+    with pytest.raises(CliError, match="expected exactly one"):
+        classify_options("http://host", 42, Path("jar"), lambda *_, **__: options)
+
+
+@pytest.mark.parametrize("options", [_OPTIONS, _RULE_LIST])
+def test_classify_options_returns_the_one_rule(options: object) -> None:
+    rule = classify_options("http://host", 42, Path("jar"), lambda *_, **__: options)
+    assert rule["test_id"] == 5
+
+
 def test_matcher_suppresses_every_dimension_for_a_test_only_rule() -> None:
     """The bulk endpoint takes every dimension; an empty one does not restrict.
 
     Verdicts are the exception: they are ignored with null, while an empty
     list is rejected.
     """
-    assert matcher_for([], _OPTIONS) == {
+    assert matcher_for([], _RULE) == {
         "test_id": 5,
         "parameters": {},
         "verdicts": None,
@@ -342,13 +392,13 @@ def test_matcher_fills_the_dimensions_it_keeps_from_the_options() -> None:
     Parameters and verdicts are the result's own; tags are the run's default
     (important) ones, not every allowed tag.
     """
-    assert matcher_for(["verdicts"], _OPTIONS) == {
+    assert matcher_for(["verdicts"], _RULE) == {
         "test_id": 5,
         "parameters": {},
         "verdicts": [["Packet lost"]],
         "tags": [],
     }
-    assert matcher_for(["parameters", "verdicts", "tags"], _OPTIONS) == {
+    assert matcher_for(["parameters", "verdicts", "tags"], _RULE) == {
         "test_id": 5,
         "parameters": {"mode": "promisc", "env": "lab"},
         "verdicts": [["Packet lost"]],
@@ -603,6 +653,37 @@ def test_apply_classification_creates_then_closes(tmp_path: Path) -> None:
     ) in calls
     # close is a collection action, taking the ids in the body.
     assert ("POST", "http://host/api/v2/issues/close/", {"ids": [3]}) in calls
+
+
+def test_classify_sends_the_runs_the_list_shape_gives(tmp_path: Path) -> None:
+    """Given a list of rules, the matcher is told by its test and its runs."""
+    from core.classify_api import apply_classification
+
+    bodies: list[dict] = []
+
+    def fetch(
+        url: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+        **_: object,
+    ) -> object:
+        if "results/?" in url:
+            return {"results": [_row(42)]}
+        if url.endswith("/classify/options/"):
+            return _RULE_LIST
+        if url.endswith("/classify/"):
+            bodies.append(payload or {})
+            return {"issue_id": 3, "rule_ids": [9]}
+        return {}
+
+    manifest, path = _classify_manifest(tmp_path)
+    apply_classification(manifest, path, "http://host", Path("jar"), fetch)
+
+    assert bodies[0]["matchers"] == [
+        {"test_id": 5, "run_ids": [7], "parameters": {}, "verdicts": None, "tags": []}
+    ]
+    assert manifest["classification"]["rules"][0]["ruleId"] == 9
 
 
 def test_a_new_issue_takes_the_results_project(tmp_path: Path) -> None:

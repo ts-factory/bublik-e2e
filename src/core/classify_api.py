@@ -9,10 +9,15 @@ the fixture.
 Rules are created through ``POST /results/classify/`` — the bulk endpoint the UI
 itself calls — rather than by POSTing to ``/issue_rules/`` directly. That way the
 fixture exercises the real triage path. The endpoint takes the matcher in full,
-one per test among the results, so what a rule should contain is read first from
+one per rule among the results, so what a rule should contain is read first from
 ``POST /results/classify/options/``: the test id, the parameters and verdicts the
 result has, and the run's important tags. This module never reconstructs any of
 those itself.
+
+The options come in one of two shapes, and both are read: an object with the
+run's ``tags`` and a ``tests`` list, or a list of rules, each carrying its own
+``tags`` and the ``run_ids`` that, with the test id, tell the rule in the
+matcher.
 
 Each rule classifies its pin's single result, and Bublik otherwise applies rules
 only on import, so the API-seeded runs -- imported before any rule existed --
@@ -39,14 +44,15 @@ from core.common import CliError, console, write_json
 EMPTY_BY_DIMENSION: dict[str, Any] = {"parameters": {}, "verdicts": None, "tags": []}
 
 
-def matcher_for(match: list[str], options: dict[str, Any]) -> dict[str, Any]:
+def matcher_for(match: list[str], rule: dict[str, Any]) -> dict[str, Any]:
     """Build the classify matcher that keeps only ``match``.
 
-    ``options`` is the ``/results/classify/options/`` response for the one
-    result being classified: its single test supplies the test id, the
-    parameters and the verdicts, and the run's default (important) tags supply
-    the tags -- the same values the single-result endpoint used to capture on
-    its own.
+    ``rule`` is the one rule the ``/results/classify/options/`` response
+    proposes for the one result being classified, as :func:`classify_options`
+    returns it: the test id, the parameters and the verdicts, and the run's
+    default (important) tags -- the same values the single-result endpoint used
+    to capture on its own. Its ``run_ids``, when the options gave them, go into
+    the matcher as they are: they tell the rule, not what it matches.
 
     The test's verdicts are its results' distinct verdict lists, and a matcher
     restricting verdicts must give every one of them, getting a rule per list.
@@ -54,31 +60,60 @@ def matcher_for(match: list[str], options: dict[str, Any]) -> dict[str, Any]:
     rule. The lists are passed through untouched: the backend matches verdicts
     in order, so sorting them would make a rule that matches nothing.
 
-    >>> options = {
+    >>> rule = {
+    ...     "test_id": 5,
+    ...     "parameters": {"mode": "promisc"},
+    ...     "verdicts": [["lost"]],
     ...     "tags": {"default": ["linux"], "allowed": ["linux", "x86"]},
-    ...     "tests": [
-    ...         {"test_id": 5, "parameters": {"mode": "promisc"}, "verdicts": [["lost"]]}
-    ...     ],
     ... }
-    >>> matcher_for([], options)
+    >>> matcher_for([], rule)
     {'test_id': 5, 'parameters': {}, 'verdicts': None, 'tags': []}
-    >>> matcher_for(["verdicts"], options)
+    >>> matcher_for(["verdicts"], rule)
     {'test_id': 5, 'parameters': {}, 'verdicts': [['lost']], 'tags': []}
-    >>> matcher_for(["parameters", "tags"], options)
+    >>> matcher_for(["parameters", "tags"], rule)
     {'test_id': 5, 'parameters': {'mode': 'promisc'}, 'verdicts': None, 'tags': ['linux']}
+    >>> matcher_for([], {**rule, "run_ids": [7]})
+    {'test_id': 5, 'run_ids': [7], 'parameters': {}, 'verdicts': None, 'tags': []}
     """
-    test = options["tests"][0]
     captured: dict[str, Any] = {
-        "parameters": dict(test.get("parameters") or {}),
-        "verdicts": [list(verdicts) for verdicts in test.get("verdicts") or []],
-        "tags": sorted((options.get("tags") or {}).get("default") or []),
+        "parameters": dict(rule.get("parameters") or {}),
+        "verdicts": [list(verdicts) for verdicts in rule.get("verdicts") or []],
+        "tags": sorted((rule.get("tags") or {}).get("default") or []),
     }
-    matcher: dict[str, Any] = {"test_id": int(test["test_id"])}
+    matcher: dict[str, Any] = {"test_id": int(rule["test_id"])}
+    if rule.get("run_ids"):
+        matcher["run_ids"] = [int(run_id) for run_id in rule["run_ids"]]
     for dimension in MATCH_DIMENSIONS:
         matcher[dimension] = (
             captured[dimension] if dimension in match else EMPTY_BY_DIMENSION[dimension]
         )
     return matcher
+
+
+def rules_of(options: Any) -> list[dict[str, Any]]:
+    """The rules a ``/results/classify/options/`` response proposes.
+
+    A list is already one rule per entry, each with its own tags. The object
+    shape holds the run's tags once and a test per entry, so each test gets
+    those tags. Anything else proposes nothing.
+
+    >>> rules_of([{"test_id": 5, "tags": {"default": ["a"]}}])
+    [{'test_id': 5, 'tags': {'default': ['a']}}]
+    >>> rules_of({"tags": {"default": ["a"]}, "tests": [{"test_id": 5}]})
+    [{'test_id': 5, 'tags': {'default': ['a']}}]
+    >>> rules_of(None)
+    []
+    """
+    if isinstance(options, list):
+        return [rule for rule in options if isinstance(rule, dict)]
+    if isinstance(options, dict):
+        tags = options.get("tags") or {}
+        return [
+            {**test, "tags": test.get("tags") or tags}
+            for test in options.get("tests") or []
+            if isinstance(test, dict)
+        ]
+    return []
 
 
 def classify_options(
@@ -88,10 +123,11 @@ def classify_options(
     fetch: Any,
     cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """What a rule classifying ``result_id`` may contain, per the backend.
+    """The rule the backend proposes for classifying ``result_id`` alone.
 
-    The endpoint groups the results by test; with one result there is exactly
-    one group, and anything else means the instance disagrees with the pin.
+    The endpoint groups the results by test (and by run tags); with one result
+    there is exactly one group, and anything else means the instance disagrees
+    with the pin.
     """
     key = f"classify-options:{result_id}"
     if cache is not None and key in cache:
@@ -102,15 +138,15 @@ def classify_options(
         payload={"result_ids": [result_id]},
         cookie_jar=cookie_jar,
     )
-    tests = options.get("tests") if isinstance(options, dict) else None
-    if not tests or len(tests) != 1:
+    rules = rules_of(options)
+    if len(rules) != 1:
         raise CliError(
-            f"result {result_id}: classify options named {len(tests or [])} tests "
+            f"result {result_id}: classify options proposed {len(rules)} rules "
             "for a single result; expected exactly one"
         )
     if cache is not None:
-        cache[key] = options
-    return options
+        cache[key] = rules[0]
+    return rules[0]
 
 
 def _param_strings(params: dict[str, Any]) -> set[str]:
@@ -356,14 +392,14 @@ def apply_classification(
         # categories, one rule per (test, category). A plan rule is one pin and
         # one category, so both lists are singletons and exactly one rule comes
         # back.
-        options = classify_options(base_url, result_id, cookie_jar, fetch, lookups)
+        proposed = classify_options(base_url, result_id, cookie_jar, fetch, lookups)
         body = {
             "result_ids": [result_id],
             "issue": issue_payload,
             "categories": [rule["category"]],
             "expected": rule["expected"],
             "scope": rule["scope"],
-            "matchers": [matcher_for(rule.get("match") or [], options)],
+            "matchers": [matcher_for(rule.get("match") or [], proposed)],
         }
         response = fetch(
             f"{base_url}/api/v2/results/classify/",
